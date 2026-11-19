@@ -392,3 +392,71 @@ test('the same words typed differently are learned separately', async () => {
   assert.ok(['angry', 'frustrated'].includes(loud.data.feelingOptions[0].emotion) || loud.data.feelingOptions.some((f) => f.emotion === 'angry'));
   assert.ok(loud.data.suggested.intensity >= 4);
 });
+
+import { interpretOwnWords } from '../src/interpret.js';
+
+test('own words: misspellings, emoji, Hinglish and "not" are understood', () => {
+  const r = (t) => { const x = interpretOwnWords(t); return [x.intents, x.emotions]; };
+  assert.deepEqual(r('i was just kidding'), [['joking'], []]);
+  assert.deepEqual(r('angery!!'), [[], ['angry']]);
+  assert.deepEqual(r('gussa aa gaya'), [[], ['angry']]);
+  assert.deepEqual(r('mazak tha yaar'), [['joking'], ['amused']]);
+  assert.deepEqual(r('😡😡'), [[], ['angry']]);
+  assert.deepEqual(r('i was not angry just teasing'), [['teasing'], []]);
+  assert.deepEqual(r('gussa nahi tha bas mazak'), [['joking'], ['amused']]);
+  assert.equal(interpretOwnWords('i felt like a loser').understood, false);
+});
+
+test('quick checks accept own words, and repeated words become options', async () => {
+  const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'words', platform: 'pi_network' } });
+  const key = reg.apiKey;
+  const ask = () => call('/api/v1/checks', { method: 'POST', token: key, body: { utterance: 'wah bhai wah, kya service hai', consent: true } });
+
+  assert.equal((await call(`/api/v1/checks/${(await ask()).data.id}/answer`, { method: 'POST', token: key, body: {} })).status, 400);
+
+  // Only own words, no taps: understood and learned.
+  const a = await ask();
+  assert.ok(a.data.ownMeaningPrompt && a.data.ownFeelingPrompt);
+  const r1 = await call(`/api/v1/checks/${a.data.id}/answer`, { method: 'POST', token: key, body: { ownMeaning: 'taana mar raha tha', ownFeeling: 'bahut gussa' } });
+  assert.deepEqual(r1.data.choice.intents, ['sarcastic']);
+  assert.deepEqual(r1.data.choice.emotions, ['angry']);
+  assert.equal(r1.data.ownWords.meaning, 'taana mar raha tha');
+
+  // Taps plus own words together.
+  const b = await ask();
+  const sarc = b.data.options.find((o) => o.intent === 'sarcastic');
+  const r2 = await call(`/api/v1/checks/${b.data.id}/answer`, { method: 'POST', token: key, body: { optionIds: [sarc.id], ownMeaning: 'taana mar raha tha', ownFeeling: 'fed up 😤' } });
+  assert.deepEqual(r2.data.choice.intents, ['sarcastic']);
+  assert.ok(r2.data.choice.emotions.includes('frustrated'));
+
+  // Two people used the same words, so the third person can just tap them.
+  const c = await ask();
+  const phrase = c.data.options.find((o) => o.basis === 'people_said');
+  assert.ok(phrase, 'popular own words offered as an option');
+  assert.equal(phrase.label, '💬 taana mar raha tha');
+  const feelPhrase = c.data.feelingOptions.find((f) => f.basis === 'people_said');
+  assert.equal(feelPhrase, undefined, 'feeling words differed, so not offered yet');
+  const r3 = await call(`/api/v1/checks/${c.data.id}/answer`, { method: 'POST', token: key, body: { optionIds: [phrase.id] } });
+  assert.deepEqual(r3.data.choice.intents, ['sarcastic']);
+
+  // Words nobody can read yet go to the community.
+  const d = await ask();
+  const r4 = await call(`/api/v1/checks/${d.data.id}/answer`, { method: 'POST', token: key, body: { ownMeaning: 'i felt like a loser' } });
+  assert.equal(r4.data.understoodOwnWords.intents.length, 0);
+  const { data: lab } = await call('/api/labelers', { method: 'POST', body: { displayName: 'reader' } });
+  let found = false;
+  for (let t = (await call('/api/tasks/next', { token: lab.token })).data.task; t; t = (await call('/api/tasks/next', { token: lab.token })).data.task) {
+    if (t.agentGuess?.includes('loser')) { found = true; break; }
+    await call(`/api/queries/${t.id}/labels`, { method: 'POST', token: lab.token, body: { intents: ['unclear'], emotions: ['neutral'] } });
+  }
+  assert.ok(found);
+});
+
+test('labelers and sharers can answer in their own words', async () => {
+  const { data: lab } = await call('/api/labelers', { method: 'POST', body: { displayName: 'own-words' } });
+  const shared = await call('/api/moments', { method: 'POST', token: lab.token, body: { utterance: 'haan haan bilkul', ownMeaning: 'mazak udaa raha tha', ownFeeling: 'irritated', consent: true } });
+  assert.equal(shared.status, 201);
+  const empty = await call('/api/moments', { method: 'POST', token: lab.token, body: { utterance: 'x', consent: true } });
+  assert.equal(empty.status, 400);
+  assert.match(empty.data.error, /own words/);
+});

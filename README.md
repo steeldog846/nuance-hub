@@ -42,6 +42,23 @@ for every connected AI.
 If an AI can't show buttons, it sends the person `tapUrl`, a one-screen page with
 the same choices.
 
+## In their own words
+
+Every place people answer has two boxes: **"Or say it your way"** (meaning) and **"Or your
+own feeling"**. People can tap, type, or both. Built for everyday typing and for people
+who don't read or write much:
+
+* Choices start with an emoji (😠 angry, 🙄 I was being sarcastic) so they can be
+  recognised at a glance.
+* Typed words are read automatically (`src/interpret.js`): spelling mistakes ("angery",
+  "seriuos"), no punctuation, emoji ("😡😡"), "not"/"nahi" ("gussa nahi tha"), and common
+  Hinglish words ("gussa", "mazak", "taana", "pareshan", "khush"…).
+* The words are always kept exactly as written, and learned from.
+* **Words several people use become a tap option** for the next person in a similar
+  situation ("💬 taana mar raha tha"), on both the meanings and feelings rows.
+* Words nobody can read yet are recorded as-is and sent to the community to work out.
+* All-lowercase typing is treated as normal, not as a signal.
+
 ## Several answers at once
 
 Everywhere people answer (quick checks, the tap page, Share a moment, Answer questions),
@@ -205,8 +222,9 @@ The key is shown only once.
 ```
 * `shouldAsk: false` → don't ask; act on `suggested` (which can hold several `intents`/`emotions`, and an `intensity`).
 * `typing` describes how the message was typed (`style`: plain, stressed_words, all_caps, all_lower, mocking_case; `emphasis` 0-3; `shoutedWords`; …). Send the message exactly as typed.
-* `feelingOptions` (`f1`…`f4`) are the optional feelings row.
-* `POST /api/v1/checks/:id/answer` `{ "optionIds": ["o1", "o3"], "feelings": ["f2"] }` (`"other"` with optional `"otherText"` is allowed too; a single `"optionId"` still works).
+* `feelingOptions` (`f1`…`f4`) are the optional feelings row. Options with `basis: "people_said"` (`p1`, `pf1`…) are other people's own words.
+* `POST /api/v1/checks/:id/answer` `{ "optionIds": ["o1", "o3"], "feelings": ["f2"], "ownMeaning": "taana mar raha tha", "ownFeeling": "gussa 😡" }`. Any mix works: taps only, words only, or both. The reply includes `understoodOwnWords`.
+* Labels and shared moments accept `ownMeaning` / `ownFeeling` the same way.
 * `POST /api/v1/checks/:id/reaction` `{ "reaction": "helpful", "aiResponse": "what you replied" }`.
 * The hosted tap page uses `GET/POST /api/checks/:id…` without a key; the long random id is the permission.
 * Learning settings (how alike situations must be, 5 people, 80%) are in `src/learning.js`.
@@ -296,6 +314,7 @@ people have answered, `consensus` holds:
 | File | What it does |
 |---|---|
 | `src/server.js` | HTTP server, API routes, static web app |
+| `src/interpret.js` | Reads people's own words: misspellings, emoji, "not"/"nahi", Hinglish |
 | `src/style.js` | Notices how a message was typed: CAPITALS, ALL CAPS, mOcKiNg case, "!!!", "sooo" |
 | `src/learning.js` | Quick checks: ranks one-tap choices from past answers, decides when to stop asking |
 | `src/mcp.js` | MCP endpoint and tool definitions |

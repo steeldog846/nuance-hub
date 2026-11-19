@@ -95,9 +95,9 @@ export function openApiSpec(baseUrl) {
             properties: {
               optionIds: { type: 'array', items: { type: 'string' }, description: 'Every meaning tapped (several allowed)' },
               feelings: { type: 'array', items: { type: 'string' }, description: 'Feeling option ids tapped (optional)' },
-              otherText: { type: 'string' },
+              ownMeaning: { type: 'string', description: 'What they meant, in their own words (any language/spelling/emoji)' },
+              ownFeeling: { type: 'string', description: 'How they felt, in their own words' },
             },
-            required: ['optionIds'],
           } } } },
           responses: { 200: { description: 'Recorded' } },
         },

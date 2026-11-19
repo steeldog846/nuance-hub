@@ -10,6 +10,7 @@
 import { similarity } from './analyzer.js';
 import { INTENT_PHRASES, EMOTION_EMOJI } from './taxonomy.js';
 import { analyzeTyping, styleAffinity } from './style.js';
+import { interpretOwnWords, normalize } from './interpret.js';
 
 export const LEARNING = {
   minSimilarity: 0.35,  // how alike two situations must be to share lessons
@@ -18,7 +19,9 @@ export const LEARNING = {
   maxSilentMissRate: 0.2, // if silent guesses miss more than this, ask again
   maxOptions: 3,
   maxFeelings: 4,
-  sameStyle: 0.85,        // style affinity needed for someone to count toward "no need to ask"
+  sameStyle: 0.85,
+  minPhrasePeople: 2,     // people who must use the same own words before they become a tap option
+  maxPhrases: 2,        // style affinity needed for someone to count toward "no need to ask"
 };
 
 const pretty = (s) => s.replace(/_/g, ' ');
@@ -42,8 +45,9 @@ export function situationSimilarity(a, b) {
   return 0.75 * s + 0.25 * similarity(ca, cb);
 }
 
+// Emoji first, short words after: easy to recognise even for people who don't read much.
 export function optionLabel(intent, emotion) {
-  return `${INTENT_PHRASES[intent] || intent} ${EMOTION_EMOJI[emotion] || ''}`.trim();
+  return `${EMOTION_EMOJI[emotion] || ''} ${INTENT_PHRASES[intent] || intent}`.trim();
 }
 
 const intentsIn = (m) => m?.intents?.length ? m.intents : [m?.intent].filter(Boolean);
@@ -55,21 +59,25 @@ export function recall(situation, memory, opts = LEARNING) {
   const intentVotes = new Map();
   const emotionVotes = new Map();
   const pairVotes = new Map(); // intent -> Map(emotion -> weight): each meaning's usual feeling
-  let totalWeight = 0;
+  let intentTotal = 0;
+  let emotionTotal = 0;
   let people = 0;
+  const phrases = { meaning: new Map(), feeling: new Map() }; // normalized own words -> { text, people }
   let sameStylePeople = 0;
   const neighbours = [];
 
   const add = (map, k, w) => map.set(k, (map.get(k) || 0) + w);
   const learnFrom = (meaning, w, count, affinity) => {
     const intents = intentsIn(meaning), emotions = emotionsIn(meaning);
+    if (!intents.length && !emotions.length) return;
+    if (intents.length) intentTotal += w;
+    if (emotions.length) emotionTotal += w;
     for (const i of new Set(intents)) {
       add(intentVotes, i, w);
       if (!pairVotes.has(i)) pairVotes.set(i, new Map());
       for (const e of emotions) add(pairVotes.get(i), e, w);
     }
     for (const e of new Set(emotions)) add(emotionVotes, e, w);
-    totalWeight += w;
     people += count;
     if (affinity >= opts.sameStyle) sameStylePeople += count;
   };
@@ -79,6 +87,16 @@ export function recall(situation, memory, opts = LEARNING) {
     if (s < opts.minSimilarity) continue;
     const affinity = styleAffinity(typing, c.typing || analyzeTyping(c.utterance));
     neighbours.push({ c, s, affinity });
+    // People's own words, so phrases many people use can become options for the next person.
+    for (const kind of ['meaning', 'feeling']) {
+      const text = c.ownWords?.[kind];
+      if (!text) continue;
+      const k = normalize(text);
+      if (!k) continue;
+      const cur = phrases[kind].get(k) || { text, people: 0 };
+      cur.people++;
+      phrases[kind].set(k, cur);
+    }
     if (c.choice) learnFrom(c.choice, s * affinity, 1, affinity);
     // Acting without asking and hearing "that helped" quietly confirms the guess.
     else if (!c.asked && c.reaction === 'helpful' && c.suggested) learnFrom(c.suggested, s * affinity * 0.5, 1, affinity);
@@ -91,13 +109,17 @@ export function recall(situation, memory, opts = LEARNING) {
     learnFrom(q.consensus, s * affinity * n, n, affinity);
   }
 
-  const ranked = (map) => [...map.entries()]
-    .map(([k, w]) => ({ key: k, share: totalWeight ? Math.min(1, w / totalWeight) : 0 }))
+  const ranked = (map, total) => [...map.entries()]
+    .map(([k, w]) => ({ key: k, share: total ? Math.min(1, w / total) : 0 }))
     .sort((a, b) => b.share - a.share);
   const usualFeeling = (intent) => [...(pairVotes.get(intent) || new Map()).entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
 
-  const intents = ranked(intentVotes).map(({ key, share }) => ({ intent: key, emotion: usualFeeling(key), share }));
-  const emotions = ranked(emotionVotes).map(({ key, share }) => ({ emotion: key, share }));
+  const intents = ranked(intentVotes, intentTotal).map(({ key, share }) => ({ intent: key, emotion: usualFeeling(key), share }));
+  const emotions = ranked(emotionVotes, emotionTotal).map(({ key, share }) => ({ emotion: key, share }));
+  const popular = (kind) => [...phrases[kind].values()]
+    .filter((p) => p.people >= opts.minPhrasePeople)
+    .sort((a, b) => b.people - a.people)
+    .slice(0, opts.maxPhrases);
 
   const silent = neighbours.filter(({ c, affinity }) => !c.asked && c.reaction && affinity >= opts.sameStyle);
   const silentMissRate = silent.length ? silent.filter(({ c }) => c.reaction !== 'helpful').length / silent.length : 0;
@@ -109,7 +131,11 @@ export function recall(situation, memory, opts = LEARNING) {
     .slice(0, 3)
     .map(({ c }) => ({ response: c.aiFollowUp, meaning: c.choice || c.suggested, typedAs: c.typing?.style }));
 
-  return { typing, intents, emotions, people, sameStylePeople, silentMissRate, whatWorked: replies('helpful'), whatMissed: replies('missed') };
+  return {
+    typing, intents, emotions, people, sameStylePeople, silentMissRate,
+    peopleSaid: { meaning: popular('meaning'), feeling: popular('feeling') },
+    whatWorked: replies('helpful'), whatMissed: replies('missed'),
+  };
 }
 
 // Feelings people tend to have when they type a certain way.
@@ -150,6 +176,16 @@ export function buildQuickCheck(situation, appAnswer, memory, opts = LEARNING) {
   for (const o of options) addFeeling(o.emotion, null, 'default');
   for (const e of ['amused', 'neutral']) addFeeling(e, null, 'default');
 
+  // Words other people typed themselves in this situation, offered as one more tap.
+  learned.peopleSaid.meaning.forEach((p, i) => {
+    const read = interpretOwnWords(p.text);
+    options.push({ id: `p${i + 1}`, label: `💬 ${p.text}`, text: p.text, intent: read.intents[0] || null, intents: read.intents, emotions: read.emotions, people: p.people, basis: 'people_said' });
+  });
+  learned.peopleSaid.feeling.forEach((p, i) => {
+    const read = interpretOwnWords(p.text);
+    feelingOptions.push({ id: `pf${i + 1}`, label: `💬 ${p.text}`, text: p.text, emotion: read.emotions[0] || null, emotions: read.emotions, people: p.people, basis: 'people_said' });
+  });
+
   // Only people who typed it a similar way count toward skipping the question:
   // "fantastic, late again" and "FANTASTIC, LATE AGAIN!!" are learned separately.
   const confident = top && learned.sameStylePeople >= opts.minEvidence && top.share >= opts.minShare;
@@ -173,7 +209,7 @@ export function buildQuickCheck(situation, appAnswer, memory, opts = LEARNING) {
     : { intent: options[0].intent, emotion: options[0].emotion, intents: [options[0].intent], emotions: [options[0].emotion], intensity, confidence: appAnswer.confidence, basis: appAnswer.source };
 
   const n = learned.sameStylePeople;
-  const typedNote = typing.style !== 'plain' ? ` typed ${typing.style === 'all_caps' ? 'in ALL CAPS' : typing.style === 'stressed_words' ? 'with words in CAPITALS' : typing.style === 'mocking_case' ? 'in mOcKiNg case' : 'in lowercase'}` : '';
+  const typedNote = !['plain', 'all_lower'].includes(typing.style) ? ` typed ${typing.style === 'all_caps' ? 'in ALL CAPS' : typing.style === 'stressed_words' ? 'with words in CAPITALS' : typing.style === 'mocking_case' ? 'in mOcKiNg case' : 'in lowercase'}` : '';
   let reason;
   if (!shouldAsk) reason = `${Math.round(top.share * 100)}% of ${n} people who wrote something similar${typedNote} meant this.`;
   else if (confident) reason = 'People usually mean this here, but acting on it without asking has recently gone wrong, so asking again.';
@@ -190,6 +226,8 @@ export function buildQuickCheck(situation, appAnswer, memory, opts = LEARNING) {
     reason,
     prompt: 'Quick check so I get this right. Did you mean… (tap all that fit)',
     feelingPrompt: 'And how did you feel? (optional)',
+    ownMeaningPrompt: 'Or say it your way',
+    ownFeelingPrompt: 'Or your own feeling',
     options,
     feelingOptions,
     otherOption: { id: 'other', label: 'Something else' },

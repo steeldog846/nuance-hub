@@ -9,6 +9,7 @@ import { redact } from './redact.js';
 import { analyze, similarity } from './analyzer.js';
 import { computeConsensus, updatedReputation, intentsOf, DEFAULTS } from './consensus.js';
 import { analyzeTyping, STYLES } from './style.js';
+import { interpretOwnWords } from './interpret.js';
 import { handleMcpMessage } from './mcp.js';
 import { buildQuickCheck } from './learning.js';
 import { openApiSpec } from './openapi.js';
@@ -55,18 +56,35 @@ function parseContext(raw) {
 
 // People may pick several meanings and feelings: "intents": [...], "emotions": [...].
 // A single "intent"/"emotion" still works.
-function tagList(body, many, one, valid, all) {
+function tagList(body, many, one, valid, all, extra = [], allowEmpty = false) {
   const raw = Array.isArray(body[many]) ? body[many] : body[one] !== undefined ? [body[one]] : [];
-  const list = [...new Set(raw)];
-  if (!list.length) throw new HttpError(400, `Pick at least one: "${many}" (any of ${all.join(', ')})`);
+  const list = [...new Set([...raw, ...extra])];
+  if (!list.length && allowEmpty) return list;
+  if (!list.length) throw new HttpError(400, `Pick at least one, or say it in your own words: "${many}" (any of ${all.join(', ')})`);
   if (list.length > 5) throw new HttpError(400, `Pick at most 5 for "${many}"`);
   for (const v of list) if (!valid(v)) throw new HttpError(400, `"${v}" is not one of ${all.join(', ')}`);
   return list;
 }
 
+// Own words ("ownMeaning", "ownFeeling") can replace or add to the taps. They are read for
+// meanings/feelings (misspellings, emoji, Hinglish ok) and always kept word-for-word.
+function parseOwnWords(body) {
+  const meaning = redact(str(body.ownMeaning, 'ownMeaning', { max: 300, required: false }) || '');
+  const feeling = redact(str(body.ownFeeling, 'ownFeeling', { max: 300, required: false }) || '');
+  const m = interpretOwnWords(meaning), f = interpretOwnWords(feeling);
+  return {
+    words: meaning || feeling ? { meaning: meaning || null, feeling: feeling || null } : null,
+    intents: m.intents,
+    emotions: [...new Set([...f.emotions, ...m.emotions])],
+    meaningUnread: Boolean(meaning) && !m.intents.length,
+  };
+}
+
 function parseLabel(body) {
-  const intents = tagList(body, 'intents', 'intent', isValidIntent, INTENTS);
-  const emotions = tagList(body, 'emotions', 'emotion', isValidEmotion, EMOTIONS);
+  const own = parseOwnWords(body);
+  // Own words that can't be read yet still count: the meaning is recorded as "unclear" plus the words themselves.
+  const intents = tagList(body, 'intents', 'intent', isValidIntent, INTENTS, own.intents.length ? own.intents : own.words?.meaning ? ['unclear'] : []);
+  const emotions = tagList(body, 'emotions', 'emotion', isValidEmotion, EMOTIONS, own.emotions.length ? own.emotions : own.words?.feeling ? ['neutral'] : []);
   const intensity = Number(body.intensity ?? 3);
   if (!Number.isInteger(intensity) || intensity < 1 || intensity > 5) throw new HttpError(400, '"intensity" must be 1-5');
   return {
@@ -76,6 +94,7 @@ function parseLabel(body) {
     emotions,
     intensity,
     explanation: redact(str(body.explanation, 'explanation', { max: 600, required: false })),
+    ownWords: own.words,
   };
 }
 
@@ -151,6 +170,8 @@ function checkView(c, base) {
     options: c.options,
     feelingPrompt: c.feelingPrompt,
     feelingOptions: c.feelingOptions,
+    ownMeaningPrompt: c.ownMeaningPrompt,
+    ownFeelingPrompt: c.ownFeelingPrompt,
     multiSelect: true,
     otherOption: c.otherOption,
     suggested: c.suggested,
@@ -172,6 +193,8 @@ function publicCheckView(c) {
     id: c.id, utterance: c.utterance, prompt: c.prompt, options: c.options.map(({ id, label }) => ({ id, label })),
     feelingPrompt: c.feelingPrompt,
     feelingOptions: (c.feelingOptions || []).map(({ id, label }) => ({ id, label })),
+    ownMeaningPrompt: c.ownMeaningPrompt,
+    ownFeelingPrompt: c.ownFeelingPrompt,
     otherOption: c.otherOption, answered: Boolean(c.answeredAt), reacted: Boolean(c.reaction), reactions: REACTIONS,
   };
 }
@@ -179,14 +202,15 @@ function publicCheckView(c) {
 // The person's own tap is the strongest label there is: they know what they meant.
 function checkLearningView(c) {
   const meaning = c.choice || (c.reaction === 'helpful' ? c.suggested : null);
-  const intents = meaning.intents || [meaning.intent];
-  const emotions = meaning.emotions || [meaning.emotion];
+  const intents = meaning.intents?.length ? meaning.intents : [meaning.intent || 'unclear'];
+  const emotions = meaning.emotions?.length ? meaning.emotions : [meaning.emotion || 'neutral'];
   return {
     id: c.id,
     origin: c.choice ? 'self_reported' : 'confirmed_by_reaction',
     platform: c.platform,
     input: { context: c.context, utterance: c.utterance, typing: c.typing, locale: c.locale, modality: 'chat' },
     label: { intent: intents[0], emotion: emotions[0], intents, emotions, agreement: 1, human_explanations: [] },
+    own_words: c.ownWords || null,
     ai_follow_up: c.aiFollowUp ? { response: c.aiFollowUp, reaction: c.reaction } : null,
     status: 'resolved',
     resolved_at: c.answeredAt || c.reactedAt,
@@ -347,7 +371,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
         locale: str(body.locale, 'locale', { max: 20, required: false }) || 'en',
       };
       const appAnswer = await analyze(situation, resolvedQueries());
-      const memory = { checks: db.filter('checks', (c) => c.choice || c.reaction), resolved: resolvedQueries() };
+      const memory = { checks: db.filter('checks', (c) => c.choice || c.reaction || c.ownWords), resolved: resolvedQueries() };
       const built = buildQuickCheck(situation, appAnswer, memory);
       const c = db.insert('checks', {
         id: `chk_${crypto.randomBytes(16).toString('hex')}`,
@@ -373,40 +397,62 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
 
     async answerCheck(c, body) {
       if (c.answeredAt) throw new HttpError(409, 'Already answered');
-      // One or several taps: "optionIds": ["o1", "o3"], plus optional "feelings": ["f2"].
-      const optionIds = [...new Set(Array.isArray(body.optionIds) ? body.optionIds : [str(body.optionId, 'optionId', { max: 20 })])];
-      if (!optionIds.length) throw new HttpError(400, 'Pick at least one option');
-      const patch = { answeredAt: now(), asked: true };
+      // Taps: "optionIds": ["o1", "o3"] (several allowed), "feelings": ["f2"].
+      // Own words: "ownMeaning" / "ownFeeling" ("otherText" is the older name for ownMeaning).
+      const optionIds = [...new Set(Array.isArray(body.optionIds) ? body.optionIds : body.optionId ? [body.optionId] : [])];
+      const own = parseOwnWords({ ownMeaning: body.ownMeaning ?? body.otherText, ownFeeling: body.ownFeeling });
+      if (!optionIds.length && !(Array.isArray(body.feelings) && body.feelings.length) && !own.words) {
+        throw new HttpError(400, 'Tap at least one option, or say it in your own words');
+      }
       const picked = optionIds.filter((id) => id !== 'other').map((id) => {
         const opt = c.options.find((o) => o.id === id);
         if (!opt) throw new HttpError(400, `"${id}" must be one of ${[...c.options.map((o) => o.id), 'other'].join(', ')}`);
         return opt;
       });
-      const feelings = (Array.isArray(body.feelings) ? body.feelings : []).map((id) => {
+      const feelingPicks = (Array.isArray(body.feelings) ? body.feelings : []).map((id) => {
         const f = (c.feelingOptions || []).find((x) => x.id === id);
         if (!f) throw new HttpError(400, `"${id}" is not one of the feeling options`);
-        return f.emotion;
+        return f;
       });
-      if (picked.length) {
-        const intents = picked.map((o) => o.intent);
-        // Feelings the person tapped win; otherwise each meaning brings its usual feeling.
-        const emotions = [...new Set(feelings.length ? feelings : picked.map((o) => o.emotion))];
-        patch.choice = { intent: intents[0], emotion: emotions[0], intents, emotions };
+
+      // Tapping a phrase other people typed counts as saying those words again.
+      const phraseMeaning = picked.find((o) => o.basis === 'people_said');
+      const phraseFeeling = feelingPicks.find((f) => f.basis === 'people_said');
+      const ownWords = {
+        meaning: own.words?.meaning || phraseMeaning?.text || null,
+        feeling: own.words?.feeling || phraseFeeling?.text || null,
+      };
+
+      const intents = [...new Set([...picked.flatMap((o) => o.intents || [o.intent]), ...own.intents].filter(Boolean))];
+      const tappedFeelings = feelingPicks.flatMap((f) => f.emotions || [f.emotion]);
+      // Feelings the person gave win; otherwise each meaning brings its usual feeling.
+      const given = [...tappedFeelings, ...own.emotions].filter(Boolean);
+      const emotions = [...new Set(given.length ? given : picked.filter((o) => o.basis !== 'people_said').map((o) => o.emotion))].filter(Boolean);
+
+      const patch = { answeredAt: now(), asked: true };
+      if (ownWords.meaning || ownWords.feeling) patch.ownWords = ownWords;
+      if (intents.length || emotions.length) {
+        patch.choice = { intent: intents[0] || null, emotion: emotions[0] || null, intents, emotions };
       }
-      if (optionIds.includes('other')) {
-        patch.otherText = redact(str(body.otherText, 'otherText', { max: 300, required: false }));
-        // "Something else" is exactly what the community is for: let people work it out.
-        if (patch.otherText) {
-          await buildQuery(
-            { utterance: c.utterance, context: c.context, consent: true, locale: c.locale,
-              question: 'None of the usual readings fit. What did the person mean?',
-              agentGuess: `In their own words: ${patch.otherText}` },
-            { origin: 'check', platform: c.platform },
-          );
-        }
+      patch.otherText = own.words?.meaning || null;
+
+      // Own words we can't read yet go to the community, who work out what they mean.
+      if (own.meaningUnread || (optionIds.includes('other') && !intents.length && own.words?.meaning)) {
+        await buildQuery(
+          { utterance: c.utterance, context: c.context, consent: true, locale: c.locale,
+            question: "None of the usual readings fit. What did the person mean?",
+            agentGuess: `In their own words: ${own.words.meaning}` },
+          { origin: 'check', platform: c.platform },
+        );
       }
       db.update('checks', c.id, patch);
-      return { recorded: true, choice: c.choice, otherText: c.otherText || null, next: 'Reply to the person with this in mind, then send their reaction to /reaction.' };
+      return {
+        recorded: true,
+        choice: c.choice || null,
+        ownWords: c.ownWords || null,
+        understoodOwnWords: own.words ? { intents: own.intents, emotions: own.emotions } : null,
+        next: 'Reply to the person with this in mind, then send their reaction to /reaction.',
+      };
     },
 
     reactToCheck(c, body) {

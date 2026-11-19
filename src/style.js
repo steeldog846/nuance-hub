@@ -50,7 +50,7 @@ export function analyzeTyping(text = '') {
   if (style === 'all_caps') notes.push('whole message in capitals (shouting or strong feeling)');
   if (style === 'stressed_words') notes.push(`${shoutedWords.map((w) => `“${w}”`).join(', ')} in capitals (stressed)`);
   if (style === 'mocking_case') notes.push('mixed-up capitals, often mocking');
-  if (style === 'all_lower') notes.push('all lowercase (often casual or flat)');
+  // All lowercase is how most people type, so it isn't called out.
   if (exclamations >= 2) notes.push(`${exclamations} exclamation marks`);
   if (elongated.length) notes.push(`stretched words: ${elongated.join(', ')}`);
   if (ellipsis) notes.push('trailing dots…');

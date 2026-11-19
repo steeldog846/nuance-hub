@@ -13,9 +13,10 @@
       <blockquote class="utterance" id="said"></blockquote>
       <h2 id="prompt">Quick check…</h2>
       <div class="tap-options" id="options"></div>
-      <input id="other-text" maxlength="300" placeholder="Something else? In a few words (optional)" hidden>
+      <input class="own-words" id="own-meaning" maxlength="300" placeholder="✏️ Or say it your way">
       <p class="muted small" id="feel-prompt" hidden></p>
       <div class="chips" id="feelings"></div>
+      <input class="own-words" id="own-feeling" maxlength="300" placeholder="✏️ Or your own feeling">
       <button class="primary done-big" id="done-btn" type="button" hidden disabled>Done</button>
       <p class="error" id="err" hidden></p>
     </div>
@@ -60,20 +61,23 @@
       if (c.answered) finish('Thanks, already noted.');
       $('prompt').textContent = c.prompt;
       const picked = new Set(), feelings = new Set();
+      // Tap one or several, and/or say it in your own words (any language, any spelling, emoji ok).
       const refresh = () => {
-        $('done-btn').disabled = !picked.size;
-        $('other-text').hidden = !picked.has('other');
+        $('done-btn').disabled = !(picked.size || feelings.size || $('own-meaning').value.trim() || $('own-feeling').value.trim());
       };
       for (const o of c.options) button(o.label, toggler(picked, o.id, refresh));
-      button(c.otherOption.label, toggler(picked, 'other', refresh));
+      if (c.ownMeaningPrompt) $('own-meaning').placeholder = `✏️ ${c.ownMeaningPrompt}`;
+      if (c.ownFeelingPrompt) $('own-feeling').placeholder = `✏️ ${c.ownFeelingPrompt}`;
+      $('own-meaning').addEventListener('input', refresh);
+      $('own-feeling').addEventListener('input', refresh);
       if (c.feelingOptions.length) {
         $('feel-prompt').textContent = c.feelingPrompt;
         $('feel-prompt').hidden = false;
-        for (const f of c.feelingOptions) button(f.label, toggler(feelings, f.id), $('feelings'), 'chip');
+        for (const f of c.feelingOptions) button(f.label, toggler(feelings, f.id, refresh), $('feelings'), 'chip');
       }
       $('done-btn').hidden = false;
       $('done-btn').addEventListener('click', () => {
-        post('answer', { optionIds: [...picked], feelings: [...feelings], otherText: $('other-text').value })
+        post('answer', { optionIds: [...picked], feelings: [...feelings], ownMeaning: $('own-meaning').value.trim(), ownFeeling: $('own-feeling').value.trim() })
           .then(() => finish()).catch(fail);
       });
     }

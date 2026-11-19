@@ -195,3 +195,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .done-big { width: 100%; margin-top: 1rem; padding: .8rem; font-size: 1.05rem; }
 .done-big:disabled { opacity: .4; cursor: default; }
 #other-text { margin-bottom: .75rem; }
+
+.own-words { margin-top: .5rem; font-size: .92rem; }
+.bubble .own-words { width: 100%; background: var(--surface); }
+.tap-card .own-words { margin: .25rem 0 .75rem; }

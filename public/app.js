@@ -76,7 +76,6 @@ const STYLE_NOTE = {
   stressed_words: (t) => `Typed with ${t.shoutedWords.map((w) => `“${w}”`).join(', ')} in capitals`,
   all_caps: () => 'Typed in ALL CAPITALS',
   mocking_case: () => 'Typed in mOcKiNg case',
-  all_lower: () => 'Typed all in lowercase',
 };
 function typingNote(t) {
   if (!t) return '';
@@ -190,7 +189,9 @@ $('share').addEventListener('submit', async (e) => {
   err.hidden = ok.hidden = true;
   const fail = (m) => { err.textContent = m; err.hidden = false; };
   if (!labelerToken) return fail('Sign in on the “Answer questions” tab first.');
-  if (!shareChoice.intents?.length || !shareChoice.emotions?.length) return fail('Tap at least one meaning and one feeling.');
+  const sOwnM = $('s-own-meaning').value.trim(), sOwnF = $('s-own-feeling').value.trim();
+  if (!shareChoice.intents?.length && !sOwnM) return fail('Tap what you meant, or say it in your own words.');
+  if (!shareChoice.emotions?.length && !sOwnF) return fail('Tap how you felt, or say it in your own words.');
   if (!$('s-consent').checked) return fail('Please confirm this is your conversation and names are removed.');
   try {
     await api('/api/moments', {
@@ -203,6 +204,8 @@ $('share').addEventListener('submit', async (e) => {
         agentGuess: $('s-misread').value,
         intents: shareChoice.intents,
         emotions: shareChoice.emotions,
+        ownMeaning: sOwnM,
+        ownFeeling: sOwnF,
         explanation: $('s-explanation').value,
         consent: true,
       },
@@ -210,6 +213,7 @@ $('share').addEventListener('submit', async (e) => {
     $('share').reset();
     renderShareChips();
     $('s-typing').textContent = '';
+    $('s-own-meaning').value = $('s-own-feeling').value = '';
     ok.textContent = 'Shared, thank you. Once two more people agree, every connected AI learns from it.';
     ok.hidden = false;
   } catch (ex) { fail(ex.message); }
@@ -221,8 +225,9 @@ $('skip').addEventListener('click', loadTask); // skipping just fetches again; a
 $('task').addEventListener('submit', async (e) => {
   e.preventDefault();
   const err = $('task-error');
-  if (!choice.intents?.length || !choice.emotions?.length) {
-    err.textContent = 'Tap at least one meaning and one feeling.';
+  const ownM = $('own-meaning').value.trim(), ownF = $('own-feeling').value.trim();
+  if ((!choice.intents?.length && !ownM) || (!choice.emotions?.length && !ownF)) {
+    err.textContent = 'Tap a meaning and a feeling, or say them in your own words.';
     err.hidden = false;
     return;
   }
@@ -233,6 +238,8 @@ $('task').addEventListener('submit', async (e) => {
       body: {
         intents: choice.intents,
         emotions: choice.emotions,
+        ownMeaning: ownM,
+        ownFeeling: ownF,
         intensity: Number($('intensity').value),
         appAnswerVerdict: document.querySelector('input[name=verdict]:checked')?.value,
         explanation: $('explanation').value,
@@ -336,19 +343,31 @@ function multiTap(parent, check, onDone) {
         on ? set.add(id) : set.delete(id);
         b.setAttribute('aria-pressed', String(on));
         b.classList.toggle('picked', on);
-        done.disabled = !picked.size;
+        done.disabled = !canSend();
       });
       r.appendChild(b);
     }
     parent.appendChild(r);
     return r;
   };
-  const rows = [row([...check.options.map((o) => [o.id, o.label]), ['other', check.otherOption.label]], picked)];
+  const ownInput = (placeholder) => {
+    const i = document.createElement('input');
+    i.className = 'own-words';
+    i.maxLength = 300;
+    i.placeholder = `✏️ ${placeholder}`;
+    i.addEventListener('input', () => { done.disabled = !canSend(); });
+    parent.appendChild(i);
+    return i;
+  };
+  const canSend = () => picked.size || feelings.size || ownMeaning.value.trim() || ownFeeling.value.trim();
+  const rows = [row(check.options.map((o) => [o.id, o.label]), picked)];
+  const ownMeaning = ownInput(check.ownMeaningPrompt || 'Or say it your way');
   const fp = document.createElement('div');
   fp.className = 'small muted feel-prompt';
   fp.textContent = check.feelingPrompt;
   parent.appendChild(fp);
   rows.push(row(check.feelingOptions.map((f) => [f.id, f.label]), feelings, 'feel'));
+  const ownFeeling = ownInput(check.ownFeelingPrompt || 'Or your own feeling');
   const done = document.createElement('button');
   done.type = 'button';
   done.className = 'primary small done';
@@ -357,7 +376,8 @@ function multiTap(parent, check, onDone) {
   done.addEventListener('click', () => {
     done.disabled = true;
     rows.forEach((r) => r.querySelectorAll('button').forEach((b) => { b.disabled = true; }));
-    onDone({ optionIds: [...picked], feelings: [...feelings] });
+    ownMeaning.disabled = ownFeeling.disabled = true;
+    onDone({ optionIds: [...picked], feelings: [...feelings], ownMeaning: ownMeaning.value.trim(), ownFeeling: ownFeeling.value.trim() });
   });
   parent.appendChild(done);
 }
@@ -397,9 +417,14 @@ $('chat-form').addEventListener('submit', async (e) => {
     }
     $('chat-note').textContent = [typingNote(check.typing), check.reason].filter(Boolean).join(' — ');
     const ask = bubble('ai soft', check.prompt);
-    multiTap(ask, check, async ({ optionIds, feelings }) => {
-      await api(`/api/v1/checks/${check.id}/answer`, { method: 'POST', token: agentKey, body: { optionIds, feelings } });
-      replyAndAskReaction(check, check.options.find((o) => o.id === optionIds[0]));
+    multiTap(ask, check, async (picks) => {
+      const out = await api(`/api/v1/checks/${check.id}/answer`, { method: 'POST', token: agentKey, body: picks });
+      const u = out.understoodOwnWords;
+      if (u) {
+        const read = [...u.intents.map(intentText), ...u.emotions.map(emotionText)];
+        $('chat-note').textContent = read.length ? `Understood your words as: ${read.join(', ')}` : 'Kept your words as they are; people will help work out what they mean.';
+      }
+      replyAndAskReaction(check, out.choice);
     });
   } catch (ex) { $('chat-note').textContent = ex.message; }
 });

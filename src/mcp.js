@@ -26,7 +26,8 @@ export const MCP_TOOLS = [
       'Call this right AFTER the person replies, only when you are unsure whether they are sincere, sarcastic, joking, ' +
       'annoyed and so on. Never ask in advance. It returns what people in similar situations meant. If shouldAsk is false, ' +
       'act on "suggested" without bothering the person. If shouldAsk is true, show them "prompt" with the short options ' +
-      '(as buttons or a numbered list, plus "Something else"; they may pick several), optionally the feelingOptions, ' +
+      '(as buttons or a numbered list; they may pick several), optionally the feelingOptions, and always let them ' +
+      'answer in their own words instead (ownMeaningPrompt / ownFeelingPrompt), ' +
       'and pass their picks to record_user_choice. "typing" says how the message was typed (CAPITALS, mOcKiNg case, ' +
       '"!!!"), which changes the meaning. Pass the message exactly as typed; never change its capitals. ' +
       '"whatWorked" lists replies that helped others in the same spot.',
@@ -46,16 +47,18 @@ export const MCP_TOOLS = [
     title: 'Record what the person tapped',
     description:
       'People may tap several meanings (e.g. sarcastic AND teasing) and several feelings. Send every option id they ' +
-      'picked (o1, o2, o3, or "other" with their words if they typed any), plus any feeling ids (f1, f2, ...).',
+      'picked (o1, o2, p1 …) plus any feeling ids (f1, f2, …). If none fit, or they prefer, send their own words in ' +
+      'own_meaning / own_feeling exactly as written: any language, spelling or emoji is fine and is read automatically.',
     inputSchema: {
       type: 'object',
       properties: {
         check_id: { type: 'string' },
         option_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
         feelings: { type: 'array', items: { type: 'string' } },
-        other_text: { type: 'string' },
+        own_meaning: { type: 'string', description: 'What they meant, in their own words' },
+        own_feeling: { type: 'string', description: 'How they felt, in their own words' },
       },
-      required: ['check_id', 'option_ids'],
+      required: ['check_id'],
     },
   },
   {
@@ -161,7 +164,9 @@ async function callTool(name, args, agent, service) {
       data = await service.createCheck(agent, { utterance: args.utterance, context: args.context, locale: args.locale, consent: args.consent });
     } else if (name === 'record_user_choice') {
       const optionIds = args.option_ids || (args.option_id ? [args.option_id] : []);
-      data = await service.answerCheck(service.getCheck(agent, args.check_id), { optionIds, feelings: args.feelings, otherText: args.other_text });
+      data = await service.answerCheck(service.getCheck(agent, args.check_id), {
+        optionIds, feelings: args.feelings, ownMeaning: args.own_meaning ?? args.other_text, ownFeeling: args.own_feeling,
+      });
     } else if (name === 'record_reaction') {
       data = service.reactToCheck(service.getCheck(agent, args.check_id), { reaction: args.reaction, aiResponse: args.ai_response });
     } else if (name === 'ask_humans_about_message') {
