@@ -21,7 +21,16 @@ function keyShape() {
     : key.startsWith('sk-ant-') ? 'other Anthropic key'
     : key.startsWith('sk-') ? 'not an Anthropic key (looks like another provider\'s key)'
     : 'not an Anthropic key';
-  return { kind, length: key.length, hadExtraSpacesOrQuotes: raw !== key };
+  // Claude API keys are only letters, digits, "-" and "_"; anything else means extra text got pasted in.
+  const unexpected = key.replace(/[A-Za-z0-9_-]/g, '');
+  return {
+    kind,
+    length: key.length,
+    usualLength: 108,
+    hadExtraSpacesOrQuotes: raw !== key,
+    unexpectedCharacters: unexpected ? [...new Set(unexpected)].map((c) => (c === ' ' ? 'space' : c === '\n' ? 'line break' : c === '\t' ? 'tab' : `"${c}"`)) : [],
+    timesKeyPrefixAppears: key.split('sk-ant-').length - 1,
+  };
 }
 
 let clientPromise = null;
