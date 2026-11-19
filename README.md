@@ -59,6 +59,28 @@ who don't read or write much:
 * Words nobody can read yet are recorded as-is and sent to the community to work out.
 * All-lowercase typing is treated as normal, not as a signal.
 
+## Claude
+
+With `ANTHROPIC_API_KEY` set and `npm install` run, Claude does two jobs (`src/claude.js`):
+
+1. **The instant first guess** for every quick check and community question, taking the
+   conversation and how the message was typed (CAPITALS, "!!!") into account.
+2. **Reading people's own words** in any language or script (Hindi, Telugu, Tamil,
+   Hinglish, Spanish…), with slang, spelling mistakes and emoji. It returns the meanings
+   and feelings, an English translation, and a short English *gist*. Answers with the same
+   gist are grouped, so "taana mar raha tha" and "taana maar rahe the" count as one phrase
+   and become one tap option, shown in the spelling most people used.
+
+Details: model `claude-opus-5-5` (change with `NUANCE_MODEL`), low effort to keep it quick,
+JSON output checked against the app's label lists, and server-side fallback if Claude
+declines. If Claude is unreachable or fails, the built-in rules take over automatically.
+`GET /api/health` and the Community tab show whether Claude is connected and the last
+problem, if any.
+
+**Where to put the key:** wherever you host the app, set it as the environment variable
+`ANTHROPIC_API_KEY` (Render, Fly.io and Railway all have an "environment variables"
+setting). Keep it out of the code and out of the browser.
+
 ## Several answers at once
 
 Everywhere people answer (quick checks, the tap page, Share a moment, Answer questions),
@@ -115,7 +137,7 @@ npm test
 | Variable | Purpose |
 |---|---|
 | `PORT` | Port to listen on (default 3000) |
-| `ANTHROPIC_API_KEY` | Turns on Claude for the instant first answer. Without it the app uses past answers and built-in rules. |
+| `ANTHROPIC_API_KEY` | Connects Claude (see "Claude" below). Without it the app uses past answers and built-in rules. |
 | `NUANCE_MODEL` | Claude model id (default `claude-opus-5-5`) |
 | `NUANCE_ADMIN_TOKEN` | If set, registering a new agent requires header `x-admin-token` |
 | `NUANCE_DATA_FILE` | Where the JSON database lives (default `nuance/data/db.json`) |
@@ -314,7 +336,8 @@ people have answered, `consensus` holds:
 | File | What it does |
 |---|---|
 | `src/server.js` | HTTP server, API routes, static web app |
-| `src/interpret.js` | Reads people's own words: misspellings, emoji, "not"/"nahi", Hinglish |
+| `src/claude.js` | The connection to Claude, with automatic fallback to the built-in rules |
+| `src/interpret.js` | Reads people's own words: Claude when connected; otherwise word lists for misspellings, emoji, "not"/"nahi", Hinglish |
 | `src/style.js` | Notices how a message was typed: CAPITALS, ALL CAPS, mOcKiNg case, "!!!", "sooo" |
 | `src/learning.js` | Quick checks: ranks one-tap choices from past answers, decides when to stop asking |
 | `src/mcp.js` | MCP endpoint and tool definitions |

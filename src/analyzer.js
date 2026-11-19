@@ -7,6 +7,7 @@
 
 import { INTENTS, EMOTIONS } from './taxonomy.js';
 import { analyzeTyping } from './style.js';
+import { askClaudeJson } from './claude.js';
 
 // ---------------------------------------------------------------- heuristic
 
@@ -116,48 +117,21 @@ const SCHEMA = {
   additionalProperties: false,
 };
 
-let clientPromise = null;
-async function getClient() {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  if (!clientPromise) {
-    clientPromise = import('@anthropic-ai/sdk')
-      .then(({ default: Anthropic }) => new Anthropic())
-      .catch(() => null); // SDK not installed -> offline mode
-  }
-  return clientPromise;
-}
-
 export async function llmAnalyze(query) {
-  const client = await getClient();
-  if (!client) return null;
   const context = (query.context || []).map((t) => `${t.speaker}: ${t.text}`).join('\n');
+  const typing = query.typing || analyzeTyping(query.utterance);
   const prompt = [
     'An AI assistant had this conversation with a person and could not tell what the person really meant.',
     context ? `Conversation so far:\n${context}` : '',
-    `The message in question:\n"${query.utterance}"`,
+    `The message in question, exactly as typed:\n"${query.utterance}"`,
+    typing.note ? `How it was typed: ${typing.note}. Capitals and punctuation are part of the meaning.` : '',
     query.agentGuess ? `The assistant's own guess was: ${query.agentGuess}` : '',
-    `The assistant asks: ${query.question}`,
-    'Judge the speaker\'s real intent (e.g. sincere vs sarcastic) and dominant emotion. Explain in one or two plain sentences which cues tell you. Confidence is 0 to 1.',
+    query.question ? `The assistant asks: ${query.question}` : '',
+    "Judge the speaker's real intent (e.g. sincere vs sarcastic) and dominant emotion. Explain in one or two plain sentences which cues tell you. Confidence is 0 to 1.",
   ].filter(Boolean).join('\n\n');
-
-  try {
-    const response = await client.beta.messages.create({
-      model: process.env.NUANCE_MODEL || 'claude-opus-5-5',
-      max_tokens: 2000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
-      messages: [{ role: 'user', content: prompt }],
-    });
-    if (response.stop_reason === 'refusal') return null;
-    const text = response.content.find((b) => b.type === 'text')?.text;
-    if (!text) return null;
-    const parsed = JSON.parse(text);
-    return { source: 'llm', ...parsed, confidence: Math.max(0, Math.min(1, parsed.confidence)) };
-  } catch (err) {
-    console.warn('[nuance] Claude analysis failed, using offline analysis:', err.message);
-    return null;
-  }
+  const parsed = await askClaudeJson({ prompt, schema: SCHEMA });
+  if (!parsed || !INTENTS.includes(parsed.intent) || !EMOTIONS.includes(parsed.emotion)) return null;
+  return { source: 'llm', ...parsed, confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0)) };
 }
 
 export async function analyze(query, resolvedQueries) {

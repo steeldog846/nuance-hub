@@ -4,7 +4,8 @@
 // emoji, and common Hinglish words. Anything it can't place is still kept
 // word-for-word and learned from.
 
-import { EMOTION_EMOJI } from './taxonomy.js';
+import { EMOTION_EMOJI, INTENTS, EMOTIONS } from './taxonomy.js';
+import { askClaudeJson } from './claude.js';
 
 // [phrase or word stem, tag]. Multi-word phrases match anywhere; single words
 // also match with small spelling mistakes.
@@ -111,4 +112,56 @@ export function interpretOwnWords(text = '') {
   if (emotions.length > 1) emotions = emotions.filter((e) => e !== 'calm');
 
   return { text: raw.slice(0, 300), intents: intents.slice(0, 5), emotions: emotions.slice(0, 5), understood: Boolean(intents.length || emotions.length) };
+}
+
+// ---------------------------------------------------------------- with Claude
+
+const OWN_WORDS_SCHEMA = {
+  type: 'object',
+  properties: {
+    intents: { type: 'array', items: { type: 'string', enum: INTENTS } },
+    emotions: { type: 'array', items: { type: 'string', enum: EMOTIONS } },
+    english: { type: 'string' },
+    gist: { type: 'string' },
+    language: { type: 'string' },
+  },
+  required: ['intents', 'emotions', 'english', 'gist', 'language'],
+  additionalProperties: false,
+};
+
+const OWN_WORDS_SYSTEM = `You read short answers people type about what they meant or felt in a chat with an AI.
+People type casually: any language or script (Hindi, Telugu, Tamil, Hinglish, Spanish…), spelling mistakes, no punctuation, emoji, slang.
+Return:
+- intents: the meanings they describe (empty if the answer is only about feelings).
+- emotions: the feelings they describe (empty if none). Respect negation: "gussa nahi tha" means NOT angry.
+- english: a faithful English translation of their answer.
+- gist: the same answer as a short, plain, lowercase English phrase of 2 to 6 words, using the most common wording, so that different spellings and languages of the same answer get the same gist (e.g. "taana mar raha tha", "taana maar rahe the" and "I was taunting" all give "i was taunting").
+- language: the language name, e.g. "Hinglish".
+Only choose labels the words support; do not guess beyond them.`;
+
+// Reads own words with Claude when it is connected (any language/script, better with slang),
+// and falls back to the built-in word lists otherwise.
+export async function readOwnWords(text, { kind = 'meaning', utterance, context } = {}) {
+  const rules = interpretOwnWords(text);
+  if (!rules.text) return { ...rules, source: 'none' };
+  const convo = (context || []).slice(-4).map((t) => `${t.speaker}: ${t.text}`).join('\n');
+  const prompt = [
+    convo ? `The chat:\n${convo}` : '',
+    utterance ? `The person had written: "${utterance}"` : '',
+    `Asked ${kind === 'feeling' ? 'how they felt' : 'what they meant'}, they answered in their own words:\n"${rules.text}"`,
+  ].filter(Boolean).join('\n\n');
+  const ai = await askClaudeJson({ system: OWN_WORDS_SYSTEM, prompt, schema: OWN_WORDS_SCHEMA, maxTokens: 1500 });
+  if (!ai) return { ...rules, source: 'rules' };
+  const intents = [...new Set((ai.intents || []).filter((i) => INTENTS.includes(i)))].slice(0, 5);
+  const emotions = [...new Set((ai.emotions || []).filter((e) => EMOTIONS.includes(e)))].slice(0, 5);
+  return {
+    text: rules.text,
+    intents,
+    emotions,
+    understood: Boolean(intents.length || emotions.length),
+    english: String(ai.english || '').slice(0, 300) || null,
+    gist: normalize(String(ai.gist || '')).slice(0, 60) || null,
+    language: String(ai.language || '').slice(0, 40) || null,
+    source: 'claude',
+  };
 }

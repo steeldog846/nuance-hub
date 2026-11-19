@@ -9,7 +9,8 @@ import { redact } from './redact.js';
 import { analyze, similarity } from './analyzer.js';
 import { computeConsensus, updatedReputation, intentsOf, DEFAULTS } from './consensus.js';
 import { analyzeTyping, STYLES } from './style.js';
-import { interpretOwnWords } from './interpret.js';
+import { readOwnWords } from './interpret.js';
+import { claudeStatus } from './claude.js';
 import { handleMcpMessage } from './mcp.js';
 import { buildQuickCheck } from './learning.js';
 import { openApiSpec } from './openapi.js';
@@ -68,20 +69,25 @@ function tagList(body, many, one, valid, all, extra = [], allowEmpty = false) {
 
 // Own words ("ownMeaning", "ownFeeling") can replace or add to the taps. They are read for
 // meanings/feelings (misspellings, emoji, Hinglish ok) and always kept word-for-word.
-function parseOwnWords(body) {
+// Claude reads them when connected (any language or script); built-in word lists otherwise.
+async function parseOwnWords(body, situation = {}) {
   const meaning = redact(str(body.ownMeaning, 'ownMeaning', { max: 300, required: false }) || '');
   const feeling = redact(str(body.ownFeeling, 'ownFeeling', { max: 300, required: false }) || '');
-  const m = interpretOwnWords(meaning), f = interpretOwnWords(feeling);
+  const [m, f] = await Promise.all([
+    readOwnWords(meaning, { kind: 'meaning', ...situation }),
+    readOwnWords(feeling, { kind: 'feeling', ...situation }),
+  ]);
+  const read = (r) => (r.text ? { intents: r.intents, emotions: r.emotions, english: r.english || null, gist: r.gist || null, language: r.language || null, by: r.source } : null);
   return {
-    words: meaning || feeling ? { meaning: meaning || null, feeling: feeling || null } : null,
+    words: meaning || feeling ? { meaning: meaning || null, feeling: feeling || null, read: { meaning: read(m), feeling: read(f) } } : null,
     intents: m.intents,
     emotions: [...new Set([...f.emotions, ...m.emotions])],
     meaningUnread: Boolean(meaning) && !m.intents.length,
   };
 }
 
-function parseLabel(body) {
-  const own = parseOwnWords(body);
+async function parseLabel(body, situation) {
+  const own = await parseOwnWords(body, situation);
   // Own words that can't be read yet still count: the meaning is recorded as "unclear" plus the words themselves.
   const intents = tagList(body, 'intents', 'intent', isValidIntent, INTENTS, own.intents.length ? own.intents : own.words?.meaning ? ['unclear'] : []);
   const emotions = tagList(body, 'emotions', 'emotion', isValidEmotion, EMOTIONS, own.emotions.length ? own.emotions : own.words?.feeling ? ['neutral'] : []);
@@ -400,7 +406,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       // Taps: "optionIds": ["o1", "o3"] (several allowed), "feelings": ["f2"].
       // Own words: "ownMeaning" / "ownFeeling" ("otherText" is the older name for ownMeaning).
       const optionIds = [...new Set(Array.isArray(body.optionIds) ? body.optionIds : body.optionId ? [body.optionId] : [])];
-      const own = parseOwnWords({ ownMeaning: body.ownMeaning ?? body.otherText, ownFeeling: body.ownFeeling });
+      const own = await parseOwnWords({ ownMeaning: body.ownMeaning ?? body.otherText, ownFeeling: body.ownFeeling }, { utterance: c.utterance, context: c.context });
       if (!optionIds.length && !(Array.isArray(body.feelings) && body.feelings.length) && !own.words) {
         throw new HttpError(400, 'Tap at least one option, or say it in your own words');
       }
@@ -418,9 +424,15 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       // Tapping a phrase other people typed counts as saying those words again.
       const phraseMeaning = picked.find((o) => o.basis === 'people_said');
       const phraseFeeling = feelingPicks.find((f) => f.basis === 'people_said');
+      // Tapping a phrase other people typed counts as saying those words again (same gist, so they group).
+      const phraseRead = (opt, kind) => opt && { intents: opt.intents || [], emotions: opt.emotions || [], gist: opt.gist || null, by: 'phrase' };
       const ownWords = {
         meaning: own.words?.meaning || phraseMeaning?.text || null,
         feeling: own.words?.feeling || phraseFeeling?.text || null,
+        read: {
+          meaning: own.words?.read.meaning || phraseRead(phraseMeaning, 'meaning') || null,
+          feeling: own.words?.read.feeling || phraseRead(phraseFeeling, 'feeling') || null,
+        },
       };
 
       const intents = [...new Set([...picked.flatMap((o) => o.intents || [o.intent]), ...own.intents].filter(Boolean))];
@@ -431,6 +443,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
 
       const patch = { answeredAt: now(), asked: true };
       if (ownWords.meaning || ownWords.feeling) patch.ownWords = ownWords;
+      const understood = (r) => r && { intents: r.intents, emotions: r.emotions, english: r.english || null, by: r.by };
       if (intents.length || emotions.length) {
         patch.choice = { intent: intents[0] || null, emotion: emotions[0] || null, intents, emotions };
       }
@@ -450,7 +463,9 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
         recorded: true,
         choice: c.choice || null,
         ownWords: c.ownWords || null,
-        understoodOwnWords: own.words ? { intents: own.intents, emotions: own.emotions } : null,
+        understoodOwnWords: own.words
+          ? { intents: own.intents, emotions: own.emotions, meaning: understood(own.words.read.meaning), feeling: understood(own.words.read.feeling) }
+          : null,
         next: 'Reply to the person with this in mind, then send their reaction to /reaction.',
       };
     },
@@ -471,7 +486,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
   // ------------------------------------------------------------- routes
 
   const routes = [
-    ['GET', /^\/api\/health$/, () => ({ ok: true })],
+    ['GET', /^\/api\/health$/, () => ({ ok: true, claude: claudeStatus() })],
 
     ['GET', /^\/api\/taxonomy$/, () => ({
       intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES, platforms: PLATFORMS,
@@ -607,7 +622,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       return { task: candidates[0] ? taskView(candidates[0]) : null, remaining: candidates.length };
     }],
 
-    ['POST', /^\/api\/queries\/([\w]+)\/labels$/, (req, body, [, id]) => {
+    ['POST', /^\/api\/queries\/([\w]+)\/labels$/, async (req, body, [, id]) => {
       const l = authLabeler(req);
       const q = db.find('queries', (x) => x.id === id);
       if (!q) throw new HttpError(404, 'Question not found');
@@ -615,7 +630,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       if (db.find('labels', (x) => x.queryId === id && x.labelerId === l.id)) throw new HttpError(409, 'You already answered this one');
       const verdict = body.appAnswerVerdict;
       if (verdict && !['correct', 'partly', 'wrong'].includes(verdict)) throw new HttpError(400, '"appAnswerVerdict" must be correct, partly or wrong');
-      addLabel(q, l, parseLabel(body), { appAnswerVerdict: verdict });
+      addLabel(q, l, await parseLabel(body, { utterance: q.utterance, context: q.context }), { appAnswerVerdict: verdict });
       return { status: 201, body: { status: q.status, consensus: q.consensus } };
     }],
 
@@ -623,7 +638,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
     // Their own answer is the first vote; others confirm it before it becomes training data.
     ['POST', /^\/api\/moments$/, async (req, body) => {
       const l = authLabeler(req);
-      const label = parseLabel(body);
+      const label = await parseLabel(body, { utterance: body.utterance, context: body.context });
       const q = await buildQuery(
         { ...body, question: body.question || 'An AI misread this. What did the person really mean, and how did they feel?' },
         { origin: 'person', platform: oneOf(body.platform, 'platform', PLATFORMS, 'other'), submittedBy: l.id },

@@ -422,7 +422,11 @@ $('chat-form').addEventListener('submit', async (e) => {
       const u = out.understoodOwnWords;
       if (u) {
         const read = [...u.intents.map(intentText), ...u.emotions.map(emotionText)];
-        $('chat-note').textContent = read.length ? `Understood your words as: ${read.join(', ')}` : 'Kept your words as they are; people will help work out what they mean.';
+        const english = [u.meaning?.english, u.feeling?.english].filter(Boolean).map((t) => `“${t}”`).join(', ');
+        const by = [u.meaning?.by, u.feeling?.by].includes('claude') ? ' (read by Claude)' : '';
+        $('chat-note').textContent = read.length
+          ? `Understood your words as: ${read.join(', ')}${english ? ` — ${english}` : ''}${by}`
+          : 'Kept your words as they are; people will help work out what they mean.';
       }
       replyAndAskReaction(check, out.choice);
     });
@@ -493,6 +497,10 @@ async function loadStats() {
     d.children[1].textContent = label;
     $('stats').appendChild(d);
   }
+  const health = await api('/api/health').catch(() => null);
+  $('claude-status').textContent = health?.claude?.configured
+    ? `Claude is connected (${health.claude.model}): it makes the first guess and reads people's own words in any language.${health.claude.lastError ? ` Last problem: ${health.claude.lastError}` : ''}`
+    : 'Claude is not connected: built-in rules make the first guess and read English and common Hinglish words. Set ANTHROPIC_API_KEY to connect it.';
   const ar = $('ask-rate');
   const c = s.checks;
   ar.innerHTML = '';

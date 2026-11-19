@@ -460,3 +460,80 @@ test('labelers and sharers can answer in their own words', async () => {
   assert.equal(empty.status, 400);
   assert.match(empty.data.error, /own words/);
 });
+
+import { setClaudeClient } from '../src/claude.js';
+
+// A stand-in for the Claude API, so the wiring can be tested offline. It answers the way
+// the real API does (JSON text matching the requested schema) and records each request.
+function fakeClaude(answer) {
+  const requests = [];
+  return {
+    requests,
+    beta: { messages: { create: async (req) => {
+      requests.push(req);
+      const out = answer(req.messages[0].content, req);
+      if (out instanceof Error) throw out;
+      return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(out) }] };
+    } } },
+  };
+}
+
+test('Claude reads own words in any language and groups spelling variants', async () => {
+  const fake = fakeClaude((prompt, req) => {
+    if (req.system?.includes('gist')) {
+      if (prompt.includes('taana')) return { intents: ['sarcastic'], emotions: [], english: 'He was taunting', gist: 'i was taunting', language: 'Hinglish' };
+      if (prompt.includes('కోపం')) return { intents: [], emotions: ['angry'], english: 'I got angry', gist: 'i got angry', language: 'Telugu' };
+      return { intents: [], emotions: [], english: '', gist: '', language: 'English' };
+    }
+    return { intent: 'sarcastic', emotion: 'annoyed', confidence: 0.8, explanation: 'Praise for slow service.' };
+  });
+  setClaudeClient(fake);
+  try {
+    const health = await call('/api/health');
+    assert.equal(health.data.claude.configured, true);
+
+    const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'claude-reads', platform: 'claude' } });
+    const key = reg.apiKey;
+    const ask = () => call('/api/v1/checks', { method: 'POST', token: key, body: { utterance: 'super fast delivery, only 3 weeks', consent: true } });
+
+    const a = await ask();
+    assert.equal(a.data.suggested.basis, 'llm', 'first guess came from Claude');
+    const firstGuessReq = fake.requests.find((r) => !r.system);
+    assert.equal(firstGuessReq.model, 'claude-opus-5-5');
+    assert.equal(firstGuessReq.output_config.format.type, 'json_schema');
+
+    // Telugu feeling + Hinglish meaning, read by Claude.
+    const r1 = await call(`/api/v1/checks/${a.data.id}/answer`, { method: 'POST', token: key, body: { ownMeaning: 'taana mar raha tha', ownFeeling: 'చాలా కోపం వచ్చింది' } });
+    assert.deepEqual(r1.data.choice.intents, ['sarcastic']);
+    assert.deepEqual(r1.data.choice.emotions, ['angry']);
+    assert.equal(r1.data.understoodOwnWords.feeling.english, 'I got angry');
+    assert.equal(r1.data.understoodOwnWords.feeling.by, 'claude');
+
+    // A different spelling of the same answer: Claude gives the same gist, so they group.
+    const b = await ask();
+    await call(`/api/v1/checks/${b.data.id}/answer`, { method: 'POST', token: key, body: { ownMeaning: 'taana maar rahe the' } });
+    const c = await ask();
+    const phrase = c.data.options.find((o) => o.basis === 'people_said');
+    assert.ok(phrase, 'two spellings counted as one phrase used by 2 people');
+    assert.equal(phrase.people, 2);
+    assert.deepEqual(phrase.intents, ['sarcastic']);
+  } finally {
+    setClaudeClient(null);
+  }
+});
+
+test('if Claude fails, the built-in rules take over', async () => {
+  setClaudeClient(fakeClaude(() => Object.assign(new Error('overloaded'), { status: 529 })));
+  try {
+    const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'fallback', platform: 'custom' } });
+    const chk = await call('/api/v1/checks', { method: 'POST', token: reg.apiKey, body: { utterance: 'Oh great, it crashed again.', consent: true } });
+    assert.equal(chk.status, 201);
+    assert.equal(chk.data.suggested.basis, 'heuristic');
+    const r = await call(`/api/v1/checks/${chk.data.id}/answer`, { method: 'POST', token: reg.apiKey, body: { ownFeeling: 'gussa aa gaya' } });
+    assert.deepEqual(r.data.choice.emotions, ['angry']);
+    assert.equal(r.data.understoodOwnWords.feeling.by, 'rules');
+    assert.match((await call('/api/health')).data.claude.lastError, /529/);
+  } finally {
+    setClaudeClient(null);
+  }
+});

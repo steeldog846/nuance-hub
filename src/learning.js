@@ -88,13 +88,17 @@ export function recall(situation, memory, opts = LEARNING) {
     const affinity = styleAffinity(typing, c.typing || analyzeTyping(c.utterance));
     neighbours.push({ c, s, affinity });
     // People's own words, so phrases many people use can become options for the next person.
+    // Grouped by Claude's short English gist when available, so "taana mar raha tha" and
+    // "taana maar rahe the" count as the same phrase; by the normalized words otherwise.
     for (const kind of ['meaning', 'feeling']) {
       const text = c.ownWords?.[kind];
       if (!text) continue;
-      const k = normalize(text);
+      const read = c.ownWords.read?.[kind];
+      const k = read?.gist || normalize(text);
       if (!k) continue;
-      const cur = phrases[kind].get(k) || { text, people: 0 };
+      const cur = phrases[kind].get(k) || { text, gist: read?.gist || null, intents: read?.intents, emotions: read?.emotions, people: 0, spellings: new Map() };
       cur.people++;
+      cur.spellings.set(text, (cur.spellings.get(text) || 0) + 1);
       phrases[kind].set(k, cur);
     }
     if (c.choice) learnFrom(c.choice, s * affinity, 1, affinity);
@@ -116,10 +120,12 @@ export function recall(situation, memory, opts = LEARNING) {
 
   const intents = ranked(intentVotes, intentTotal).map(({ key, share }) => ({ intent: key, emotion: usualFeeling(key), share }));
   const emotions = ranked(emotionVotes, emotionTotal).map(({ key, share }) => ({ emotion: key, share }));
+  // Shown in the spelling most people used.
   const popular = (kind) => [...phrases[kind].values()]
     .filter((p) => p.people >= opts.minPhrasePeople)
     .sort((a, b) => b.people - a.people)
-    .slice(0, opts.maxPhrases);
+    .slice(0, opts.maxPhrases)
+    .map((p) => ({ ...p, text: [...p.spellings.entries()].sort((a, b) => b[1] - a[1])[0][0], spellings: undefined }));
 
   const silent = neighbours.filter(({ c, affinity }) => !c.asked && c.reaction && affinity >= opts.sameStyle);
   const silentMissRate = silent.length ? silent.filter(({ c }) => c.reaction !== 'helpful').length / silent.length : 0;
@@ -177,13 +183,14 @@ export function buildQuickCheck(situation, appAnswer, memory, opts = LEARNING) {
   for (const e of ['amused', 'neutral']) addFeeling(e, null, 'default');
 
   // Words other people typed themselves in this situation, offered as one more tap.
+  const tagsFor = (p) => (p.intents ? p : interpretOwnWords(p.text));
   learned.peopleSaid.meaning.forEach((p, i) => {
-    const read = interpretOwnWords(p.text);
-    options.push({ id: `p${i + 1}`, label: `💬 ${p.text}`, text: p.text, intent: read.intents[0] || null, intents: read.intents, emotions: read.emotions, people: p.people, basis: 'people_said' });
+    const read = tagsFor(p);
+    options.push({ id: `p${i + 1}`, label: `💬 ${p.text}`, text: p.text, gist: p.gist, intent: read.intents[0] || null, intents: read.intents, emotions: read.emotions, people: p.people, basis: 'people_said' });
   });
   learned.peopleSaid.feeling.forEach((p, i) => {
-    const read = interpretOwnWords(p.text);
-    feelingOptions.push({ id: `pf${i + 1}`, label: `💬 ${p.text}`, text: p.text, emotion: read.emotions[0] || null, emotions: read.emotions, people: p.people, basis: 'people_said' });
+    const read = tagsFor(p);
+    feelingOptions.push({ id: `pf${i + 1}`, label: `💬 ${p.text}`, text: p.text, gist: p.gist, emotion: read.emotions[0] || null, emotions: read.emotions, people: p.people, basis: 'people_said' });
   });
 
   // Only people who typed it a similar way count toward skipping the question:
