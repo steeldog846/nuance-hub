@@ -7,6 +7,23 @@
 
 const MODEL = () => process.env.NUANCE_MODEL || 'claude-opus-5-5';
 
+// Keys pasted into hosting dashboards often pick up spaces, line breaks or quote marks.
+const cleanKey = () => (process.env.ANTHROPIC_API_KEY || '').trim().replace(/^["']+|["']+$/g, '').trim();
+
+// What kind of key this looks like, without revealing any of it.
+function keyShape() {
+  const raw = process.env.ANTHROPIC_API_KEY || '';
+  const key = cleanKey();
+  if (!key) return null;
+  const kind = key.startsWith('sk-ant-api') ? 'Claude API key'
+    : key.startsWith('sk-ant-admin') ? 'Claude Admin key (cannot call Claude; create a normal API key)'
+    : key.startsWith('sk-ant-oat') || key.startsWith('sk-ant-ort') ? 'Claude login token (not an API key; create one at console.anthropic.com)'
+    : key.startsWith('sk-ant-') ? 'other Anthropic key'
+    : key.startsWith('sk-') ? 'not an Anthropic key (looks like another provider\'s key)'
+    : 'not an Anthropic key';
+  return { kind, length: key.length, hadExtraSpacesOrQuotes: raw !== key };
+}
+
 let clientPromise = null;
 let injected = null;
 let lastError = null;
@@ -19,18 +36,19 @@ export function setClaudeClient(client) {
 
 async function getClient() {
   if (injected) return injected;
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const apiKey = cleanKey();
+  if (!apiKey) return null;
   if (!clientPromise) {
     clientPromise = import('@anthropic-ai/sdk')
-      .then(({ default: Anthropic }) => new Anthropic({ timeout: 30_000, maxRetries: 1 }))
+      .then(({ default: Anthropic }) => new Anthropic({ apiKey, timeout: 30_000, maxRetries: 1 }))
       .catch(() => { lastError = 'The Claude SDK is not installed (run npm install).'; return null; });
   }
   return clientPromise;
 }
 
 export function claudeStatus() {
-  const configured = Boolean(injected || process.env.ANTHROPIC_API_KEY);
-  return { configured, model: configured ? MODEL() : null, lastError };
+  const configured = Boolean(injected || cleanKey());
+  return { configured, model: configured ? MODEL() : null, key: injected ? null : keyShape(), lastError };
 }
 
 // Ask Claude for JSON matching `schema`. Returns the parsed object, or null if Claude
