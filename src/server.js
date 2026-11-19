@@ -9,8 +9,9 @@ import { redact } from './redact.js';
 import { analyze, similarity } from './analyzer.js';
 import { computeConsensus, updatedReputation, DEFAULTS } from './consensus.js';
 import { handleMcpMessage } from './mcp.js';
+import { buildQuickCheck } from './learning.js';
 import { openApiSpec } from './openapi.js';
-import { INTENTS, EMOTIONS, DIFFICULTY_TYPES, MODALITIES, PLATFORMS, isValidIntent, isValidEmotion } from './taxonomy.js';
+import { INTENTS, EMOTIONS, DIFFICULTY_TYPES, MODALITIES, PLATFORMS, REACTIONS, INTENT_PHRASES, EMOTION_EMOJI, isValidIntent, isValidEmotion } from './taxonomy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -123,6 +124,50 @@ function learningView(q) {
   };
 }
 
+// What the AI gets back from a quick check.
+function checkView(c, base) {
+  return {
+    id: c.id,
+    shouldAsk: c.asked,
+    reason: c.reason,
+    prompt: c.prompt,
+    options: c.options,
+    otherOption: c.otherOption,
+    suggested: c.suggested,
+    evidence: c.evidence,
+    whatWorked: c.whatWorked,
+    whatMissed: c.whatMissed,
+    choice: c.choice,
+    otherText: c.otherText || null,
+    reaction: c.reaction,
+    tapUrl: base ? `${base}/c/${c.id}` : undefined,
+    reactions: REACTIONS,
+  };
+}
+
+// What the person sees on the hosted tap page. Nothing about other people.
+function publicCheckView(c) {
+  return {
+    id: c.id, utterance: c.utterance, prompt: c.prompt, options: c.options.map(({ id, label }) => ({ id, label })),
+    otherOption: c.otherOption, answered: Boolean(c.answeredAt), reacted: Boolean(c.reaction), reactions: REACTIONS,
+  };
+}
+
+// The person's own tap is the strongest label there is: they know what they meant.
+function checkLearningView(c) {
+  const meaning = c.choice || (c.reaction === 'helpful' ? c.suggested : null);
+  return {
+    id: c.id,
+    origin: c.choice ? 'self_reported' : 'confirmed_by_reaction',
+    platform: c.platform,
+    input: { context: c.context, utterance: c.utterance, locale: c.locale, modality: 'chat' },
+    label: { intent: meaning.intent, emotion: meaning.emotion, agreement: 1, human_explanations: [] },
+    ai_follow_up: c.aiFollowUp ? { response: c.aiFollowUp, reaction: c.reaction } : null,
+    status: 'resolved',
+    resolved_at: c.answeredAt || c.reactedAt,
+  };
+}
+
 const bearer = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
 
 // ----------------------------------------------------------------- app
@@ -133,6 +178,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
   const repOf = (labelerId) => db.find('labelers', (l) => l.id === labelerId)?.reputation ?? 1;
   const settled = () => db.filter('queries', (q) => q.status === 'resolved' || q.status === 'disputed');
   const resolvedQueries = () => db.filter('queries', (q) => q.status === 'resolved');
+  const learnedChecks = () => db.filter('checks', (c) => c.choice || (c.reaction === 'helpful' && c.suggested));
 
   function agentForKey(token) {
     return token ? db.find('agents', (a) => a.keyHash === hash(token)) : null;
@@ -256,10 +302,81 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
         .map(({ q, score }) => ({ similarity: +score.toFixed(2), ...learningView(q) }));
     },
     learnings(since, limit = 200) {
-      return settled()
-        .filter((q) => !since || q.resolvedAt > since)
-        .slice(-Math.min(1000, Math.max(1, Number(limit) || 200)))
-        .map(learningView);
+      const all = [...settled().map(learningView), ...learnedChecks().map(checkLearningView)]
+        .filter((l) => !since || l.resolved_at > since)
+        .sort((a, b) => a.resolved_at.localeCompare(b.resolved_at));
+      return all.slice(-Math.min(1000, Math.max(1, Number(limit) || 200)));
+    },
+
+    // ---- quick checks: one-tap clarification inside the conversation
+    async createCheck(agent, body, base) {
+      if (body.consent !== true) {
+        throw new HttpError(400, '"consent": true is required — the person agreed that their anonymous answers help AIs learn');
+      }
+      const situation = {
+        utterance: redact(str(body.utterance, 'utterance')),
+        context: parseContext(body.context),
+        locale: str(body.locale, 'locale', { max: 20, required: false }) || 'en',
+      };
+      const appAnswer = await analyze(situation, resolvedQueries());
+      const memory = { checks: db.filter('checks', (c) => c.choice || c.reaction), resolved: resolvedQueries() };
+      const built = buildQuickCheck(situation, appAnswer, memory);
+      const c = db.insert('checks', {
+        id: `chk_${crypto.randomBytes(16).toString('hex')}`,
+        agentId: agent.id,
+        platform: agent.platform,
+        ...situation,
+        asked: built.shouldAsk,
+        ...Object.fromEntries(Object.entries(built).filter(([k]) => k !== 'shouldAsk')),
+        appAnswer,
+        choice: null,
+        reaction: null,
+        aiFollowUp: null,
+        createdAt: now(),
+      });
+      return checkView(c, base);
+    },
+
+    getCheck(agent, id) {
+      const c = db.find('checks', (x) => x.id === id && (!agent || x.agentId === agent.id));
+      if (!c) throw new HttpError(404, 'Check not found');
+      return c;
+    },
+
+    async answerCheck(c, body) {
+      if (c.answeredAt) throw new HttpError(409, 'Already answered');
+      const optionId = str(body.optionId, 'optionId', { max: 20 });
+      const patch = { answeredAt: now(), asked: true };
+      if (optionId === 'other') {
+        patch.otherText = redact(str(body.otherText, 'otherText', { max: 300, required: false }));
+        // "Something else" is exactly what the community is for: let people work it out.
+        if (patch.otherText) {
+          await buildQuery(
+            { utterance: c.utterance, context: c.context, consent: true, locale: c.locale,
+              question: 'None of the usual readings fit. What did the person mean?',
+              agentGuess: `In their own words: ${patch.otherText}` },
+            { origin: 'check', platform: c.platform },
+          );
+        }
+      } else {
+        const opt = c.options.find((o) => o.id === optionId);
+        if (!opt) throw new HttpError(400, `"optionId" must be one of ${[...c.options.map((o) => o.id), 'other'].join(', ')}`);
+        patch.choice = { intent: opt.intent, emotion: opt.emotion };
+      }
+      db.update('checks', c.id, patch);
+      return { recorded: true, choice: c.choice, otherText: c.otherText || null, next: 'Reply to the person with this in mind, then send their reaction to /reaction.' };
+    },
+
+    reactToCheck(c, body) {
+      if (c.reaction) throw new HttpError(409, 'Reaction already recorded');
+      const reaction = oneOf(body.reaction, 'reaction', Object.keys(REACTIONS));
+      if (!reaction) throw new HttpError(400, '"reaction" is required');
+      db.update('checks', c.id, {
+        reaction,
+        reactedAt: now(),
+        aiFollowUp: c.aiFollowUp || redact(str(body.aiResponse, 'aiResponse', { max: 1000, required: false })) || null,
+      });
+      return { recorded: true, reaction };
     },
   };
 
@@ -268,7 +385,10 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
   const routes = [
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
 
-    ['GET', /^\/api\/taxonomy$/, () => ({ intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES, platforms: PLATFORMS })],
+    ['GET', /^\/api\/taxonomy$/, () => ({
+      intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES, platforms: PLATFORMS,
+      intentPhrases: INTENT_PHRASES, emotionEmoji: EMOTION_EMOJI, reactions: REACTIONS,
+    })],
 
     ['GET', /^\/(openapi\.json|\.well-known\/openapi\.json)$/, (req) => openApiSpec(baseUrl(req))],
 
@@ -291,6 +411,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
         disputed: count('disputed'),
         labels: db.data.labels.length,
         byPlatform,
+        checks: checkStats(db.data.checks),
         leaderboard,
       };
     }],
@@ -345,9 +466,20 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
 
     ['GET', /^\/api\/v1\/dataset\.jsonl$/, (req) => {
       authAgent(req);
-      const lines = resolvedQueries().map((q) => JSON.stringify(learningView(q))).join('\n');
+      const lines = [...resolvedQueries().map(learningView), ...learnedChecks().map(checkLearningView)].map((l) => JSON.stringify(l)).join('\n');
       return { raw: lines + (lines ? '\n' : ''), type: 'application/x-ndjson' };
     }],
+
+    // ---- quick checks (agent side)
+    ['POST', /^\/api\/v1\/checks$/, async (req, body) => ({ status: 201, body: await service.createCheck(authAgent(req), body, baseUrl(req)) })],
+    ['GET', /^\/api\/v1\/checks\/(chk_\w+)$/, (req, _b, [, id]) => checkView(service.getCheck(authAgent(req), id), baseUrl(req))],
+    ['POST', /^\/api\/v1\/checks\/(chk_\w+)\/answer$/, async (req, body, [, id]) => service.answerCheck(service.getCheck(authAgent(req), id), body)],
+    ['POST', /^\/api\/v1\/checks\/(chk_\w+)\/reaction$/, (req, body, [, id]) => service.reactToCheck(service.getCheck(authAgent(req), id), body)],
+
+    // ---- quick checks (person side, via the hosted tap page; the long random id is the permission)
+    ['GET', /^\/api\/checks\/(chk_\w+)$/, (_req, _b, [, id]) => publicCheckView(service.getCheck(null, id))],
+    ['POST', /^\/api\/checks\/(chk_\w+)\/answer$/, async (_req, body, [, id]) => service.answerCheck(service.getCheck(null, id), body)],
+    ['POST', /^\/api\/checks\/(chk_\w+)\/reaction$/, (_req, body, [, id]) => service.reactToCheck(service.getCheck(null, id), body)],
 
     // ---- people
     ['POST', /^\/api\/labelers$/, (_req, body) => {
@@ -428,7 +560,8 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
     try { payload = await readJson(req); }
     catch { return send(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
     const batch = Array.isArray(payload);
-    const replies = (await Promise.all((batch ? payload : [payload]).map((m) => handleMcpMessage(m, agent, service)))).filter(Boolean);
+    const svc = { ...service, createCheck: (ag, body) => service.createCheck(ag, body, baseUrl(req)) };
+    const replies = (await Promise.all((batch ? payload : [payload]).map((m) => handleMcpMessage(m, agent, svc)))).filter(Boolean);
     if (!replies.length) { res.writeHead(202); return res.end(); }
     send(res, 200, batch ? replies : replies[0]);
   }
@@ -467,6 +600,20 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
   return server;
 }
 
+// Is the AI asking less as it learns? Compare the oldest and newest checks.
+function checkStats(checks) {
+  const rate = (list) => (list.length ? +(list.filter((c) => c.asked).length / list.length).toFixed(2) : null);
+  const window = Math.max(1, Math.min(20, Math.floor(checks.length / 2)));
+  return {
+    total: checks.length,
+    answered: checks.filter((c) => c.answeredAt).length,
+    askRate: rate(checks),
+    earlyAskRate: rate(checks.slice(0, window)),
+    recentAskRate: rate(checks.slice(-window)),
+    reactions: Object.fromEntries(Object.keys(REACTIONS).map((r) => [r, checks.filter((c) => c.reaction === r).length])),
+  };
+}
+
 function baseUrl(req) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
   const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0];
@@ -499,7 +646,7 @@ function readJson(req) {
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.md': 'text/markdown' };
 
 function serveStatic(pathname, res) {
-  const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
+  const rel = pathname === '/' ? 'index.html' : /^\/c\/chk_\w+$/.test(pathname) ? 'check.html' : pathname.slice(1);
   const file = path.resolve(PUBLIC_DIR, rel);
   if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     res.writeHead(404, { 'content-type': 'text/plain' });

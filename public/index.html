@@ -118,23 +118,14 @@
     <section id="view-share" class="view" hidden>
       <form id="share" class="card">
         <h2>Share a moment an AI got wrong</h2>
-        <p class="muted">Did an assistant take your sarcasm literally, miss that you were upset, or not get your joke? Share it. Other people confirm what you meant, and then every connected AI can learn from it.</p>
+        <p class="muted">Did an assistant take your sarcasm literally or miss that you were upset? Paste what you said and tap what you meant. That's it.</p>
         <p class="small" id="share-signin-note" hidden>Sign in on the “Answer questions” tab first.</p>
 
-        <label class="stack">Which AI was it?
-          <select id="s-platform"></select>
-        </label>
-        <label class="stack"><span>What came before (optional, one line per turn, start with <code>ai:</code> or <code>human:</code>)</span>
-          <textarea id="s-context" rows="3" placeholder="human: My flight got cancelled for the third time.&#10;ai: I'm sorry to hear that! Would you like to book another flight?"></textarea>
-        </label>
         <label class="stack">What you said
           <input id="s-utterance" required maxlength="2000" placeholder="Love this airline so much.">
         </label>
-        <label class="stack">How the AI got it wrong (optional)
-          <input id="s-misread" maxlength="300" placeholder="It recommended more flights with the same airline.">
-        </label>
         <fieldset>
-          <legend>What you really meant</legend>
+          <legend>What you meant</legend>
           <div class="chips" id="s-intent-chips"></div>
         </fieldset>
         <fieldset>
@@ -142,12 +133,21 @@
           <div class="chips" id="s-emotion-chips"></div>
         </fieldset>
         <fieldset>
-          <legend>How strongly? <span class="muted" id="s-intensity-out">3</span>/5</legend>
-          <input type="range" id="s-intensity" min="1" max="5" value="3">
+          <legend>Which AI was it?</legend>
+          <div class="chips" id="s-platform-chips"></div>
         </fieldset>
-        <label class="stack">Explain it for the AI
-          <textarea id="s-explanation" rows="2" maxlength="600" placeholder="Third cancellation. Saying I love them was pure sarcasm. I was furious."></textarea>
-        </label>
+        <details class="more">
+          <summary>Add more detail (optional)</summary>
+          <label class="stack"><span>What came before (one line per turn, start with <code>ai:</code> or <code>human:</code>)</span>
+            <textarea id="s-context" rows="3" placeholder="human: My flight got cancelled for the third time.&#10;ai: I'm sorry to hear that! Would you like to book another flight?"></textarea>
+          </label>
+          <label class="stack">How the AI got it wrong
+            <input id="s-misread" maxlength="300" placeholder="It recommended more flights with the same airline.">
+          </label>
+          <label class="stack">Explain it for the AI
+            <textarea id="s-explanation" rows="2" maxlength="600" placeholder="Third cancellation. Saying I love them was pure sarcasm."></textarea>
+          </label>
+        </details>
         <label class="check small"><input type="checkbox" id="s-consent"><span>This is my own conversation (or I have permission), and I've removed names.</span></label>
         <p class="error" id="share-error" hidden></p>
         <p class="ok" id="share-ok" hidden></p>
@@ -160,14 +160,15 @@
       <div class="card">
         <h2>Connect any AI</h2>
         <p>Nuance Hub isn't tied to one company. Any assistant or AI app can connect through open standards: <strong>MCP</strong> (Claude, ChatGPT, Copilot, Cursor and most agent tools), <strong>OpenAPI</strong> (ChatGPT custom GPTs, Gemini, Copilot Studio, LangChain) or plain <strong>REST</strong> (Pi Network apps and anything else).</p>
-        <p>Your AI sends us a moment it didn't understand. We answer right away with our best guess, then people review it. When enough of them agree, your agent gets the final answer, and the example joins a shared dataset every connected agent can learn from.</p>
+        <p>When a person's reply leaves your AI unsure (sarcasm? a joke? quietly annoyed?), it asks Nuance Hub <em>after</em> they reply, never before. It gets back two or three one-tap choices in plain words, ranked by what earlier people in the same spot meant. The person taps one; nobody types.</p>
         <ol class="flow">
-          <li><strong>Register</strong> once and get an API key.</li>
-          <li><strong>Ask</strong>: <code>POST /api/v1/queries</code> with the message, the conversation around it and your question.</li>
-          <li><strong>Get a first answer</strong> straight away, from past answers, Claude or built-in rules.</li>
-          <li><strong>People review it</strong>. They label intent and emotion and explain what was going on.</li>
-          <li><strong>Learn</strong>: a webhook fires when people agree, or poll <code>GET /api/v1/learnings</code>.</li>
+          <li><strong>Check</strong>: <code>quick_check_meaning</code> (MCP) or <code>POST /api/v1/checks</code>.</li>
+          <li><strong>Skip or ask</strong>: if enough people already agreed, <code>shouldAsk</code> is false and your AI just acts on the suggestion. Otherwise it shows the taps.</li>
+          <li><strong>Record the tap</strong>, then reply. <code>whatWorked</code> shows replies that helped others in the same spot.</li>
+          <li><strong>One more tap</strong>: “That helped” / “Still missed the point” / “Right idea, wrong tone”.</li>
+          <li><strong>Every AI improves</strong>: the next person gets better choices, or isn't asked at all. If silent guesses start missing, it asks again.</li>
         </ol>
+        <p class="small muted">Hard cases (“Something else”) go to the community, who settle them on the “Answer questions” tab.</p>
       </div>
 
       <div class="card">
@@ -187,47 +188,41 @@
       </div>
 
       <div class="card">
-        <h3>3. Try a question</h3>
-
-        <label class="stack"><span>Conversation so far (one line per turn, start with <code>ai:</code> or <code>human:</code>)</span>
-          <textarea id="demo-context" rows="3">ai: Your laptop update finished installing.
-human: It restarted in the middle of my presentation.</textarea>
-        </label>
-        <label class="stack">The message the AI didn't understand
-          <input id="demo-utterance" value="Oh great, just perfect timing as always.">
-        </label>
-        <label class="stack">The AI's question
-          <input id="demo-question" value="Is the user happy with the timing or being sarcastic?">
-        </label>
-        <label class="check small"><input type="checkbox" id="demo-consent" checked><span>The person agreed to have this reviewed</span></label>
-        <div class="row end"><button class="primary" id="send-demo">Send question</button></div>
-        <pre class="code" id="demo-out" hidden></pre>
+        <h3>3. See it in a chat</h3>
+        <p class="small muted">Play the person. Send the same kind of message a few times and tap the same meaning: watch the choices re-order, then the AI stop asking.</p>
+        <div class="chat" id="chat">
+          <div class="bubble ai">Your package is delayed by two more days.</div>
+        </div>
+        <form id="chat-form" class="row">
+          <input id="chat-input" value="Fantastic, late again." maxlength="500" aria-label="Your message">
+          <button class="primary" type="submit">Send</button>
+        </form>
+        <p class="small muted" id="chat-note"></p>
       </div>
 
       <div class="card">
         <h3>API in one look</h3>
-        <pre class="code">POST /api/agents/register          {"name": "...", "webhookUrl": "https://..."}  → {apiKey}
-POST /api/v1/queries               Authorization: Bearer &lt;apiKey&gt;
-  {
-    "utterance":  "Oh great, another Monday.",
-    "context":    [{"speaker": "ai", "text": "..."}, {"speaker": "human", "text": "..."}],
-    "question":   "Is this sarcastic?",
-    "agentGuess": "happy",
-    "difficulty": "intent | emotion | language | expression | cultural | other",
-    "modality":   "text | voice_transcript | video_transcript | chat",
-    "locale":     "en",
-    "consent":    true
-  }                                → {id, status, appAnswer}
-GET  /api/v1/queries/:id           → {status, appAnswer, consensus}
-GET  /api/v1/learnings?since=ISO   → resolved examples from every agent
-GET  /api/v1/dataset.jsonl         → training file (one example per line)</pre>
-        <p class="small muted">Full docs are in <code>nuance/README.md</code>.</p>
+        <pre class="code">POST /api/agents/register              {"name", "platform", "webhookUrl"}  → {apiKey}
+
+POST /api/v1/checks                    {"utterance", "context", "consent": true}
+  → {id, shouldAsk, prompt, options[{id, label}], suggested, whatWorked, tapUrl}
+POST /api/v1/checks/:id/answer         {"optionId": "o1" | "other", "otherText"}
+POST /api/v1/checks/:id/reaction       {"reaction": "helpful|missed|tone", "aiResponse"}
+
+POST /api/v1/queries                   send a hard case to the community
+GET  /api/v1/learnings?since=ISO       everything learned, from every AI
+GET  /api/v1/dataset.jsonl             the same, as a training file</pre>
+        <p class="small muted">If your AI can't show buttons, send the person <code>tapUrl</code>: a one-screen page with the choices. Full docs: <code>nuance/README.md</code>.</p>
       </div>
     </section>
 
     <!-- ============ COMMUNITY ============ -->
     <section id="view-community" class="view" hidden>
       <div class="stats" id="stats"></div>
+      <div class="card">
+        <h3>Is the AI asking less as it learns?</h3>
+        <div id="ask-rate"></div>
+      </div>
       <div class="card">
         <h3>Questions by AI platform</h3>
         <div id="by-platform"></div>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quick check</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="tap-page">
+  <main class="tap-main">
+    <div class="card tap-card" id="card">
+      <p class="muted small">You said</p>
+      <blockquote class="utterance" id="said"></blockquote>
+      <h2 id="prompt">Quick check…</h2>
+      <div class="tap-options" id="options"></div>
+      <form id="other-form" class="row" hidden>
+        <input id="other-text" maxlength="300" placeholder="In a few words (optional)">
+        <button class="primary" type="submit">Send</button>
+      </form>
+      <p class="error" id="err" hidden></p>
+    </div>
+    <div class="card tap-card center" id="done" hidden>
+      <h2 id="done-title">Thanks, got it.</h2>
+      <p class="muted" id="done-sub">You can go back to your chat. Your tap helps every AI understand the next person better.</p>
+    </div>
+  </main>
+  <script type="module">
+    const $ = (id) => document.getElementById(id);
+    const id = location.pathname.split('/').pop();
+    const step = new URLSearchParams(location.search).get('step');
+    const post = (path, body) => fetch(`/api/checks/${id}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error); return d; });
+    const finish = (title, sub) => { $('card').hidden = true; $('done').hidden = false; if (title) $('done-title').textContent = title; if (sub) $('done-sub').textContent = sub; };
+    const fail = (e) => { $('err').textContent = e.message; $('err').hidden = false; };
+    const button = (label, onClick) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'tap'; b.textContent = label;
+      b.addEventListener('click', onClick);
+      $('options').appendChild(b);
+    };
+
+    const res = await fetch(`/api/checks/${id}`);
+    const c = await res.json();
+    if (!res.ok) { finish('This link has expired', 'Go back to your chat.'); }
+    else if (step === 'reaction') {
+      $('said').textContent = `“${c.utterance}”`;
+      if (c.reacted) finish('Thanks, already noted.');
+      $('prompt').textContent = 'How did the AI’s reply land?';
+      for (const [key, label] of Object.entries(c.reactions)) button(label, () => post('reaction', { reaction: key }).then(() => finish()).catch(fail));
+    } else {
+      $('said').textContent = `“${c.utterance}”`;
+      if (c.answered) finish('Thanks, already noted.');
+      $('prompt').textContent = c.prompt;
+      for (const o of c.options) button(o.label, () => post('answer', { optionId: o.id }).then(() => finish()).catch(fail));
+      button(c.otherOption.label, () => { $('other-form').hidden = false; $('other-text').focus(); });
+      $('other-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        post('answer', { optionId: 'other', otherText: $('other-text').value }).then(() => finish()).catch(fail);
+      });
+    }
+  </script>
+</body>
+</html>

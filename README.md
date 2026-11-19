@@ -7,7 +7,37 @@ apps, open-source models and custom agents all connect the same way, and every o
 of them learns from what people teach the others.
 
 AI assistants often can't tell whether "Oh great, another Monday" is happy or
-sarcastic, or whether "fine." means fine. Nuance Hub gives them a place to ask:
+sarcastic, or whether "fine." means fine.
+
+## The main flow: one tap, inside the conversation
+
+People won't type out what an AI got wrong, so they don't have to.
+
+1. The person replies as usual. **Only if** the AI is unsure what they meant, it
+   calls Nuance Hub, *after* the reply, never in advance.
+2. Nuance Hub sends back **two or three one-tap choices** in plain words
+   ("I was being sarcastic 🙄", "I meant it 😐", "Just joking 😄", "Something else"),
+   **ranked by what earlier people in similar situations meant**.
+3. The person taps one. The AI replies with that in mind, using `whatWorked`:
+   replies that helped other people in the same spot.
+4. One more tap on how the reply landed: "That helped", "Still missed the
+   point" or "Right idea, wrong tone".
+5. **It gets better with every person.** Once 5 people in similar situations
+   agree (80% or more), the AI stops asking and acts on what it learned
+   (`shouldAsk: false`). If those silent guesses start missing, it asks again.
+   "Something else" answers go to the human community to work out.
+
+The Community tab tracks this: how often the AI had to ask at the start versus lately.
+Every tap is the speaker's own answer, so it goes straight into the shared learnings
+for every connected AI.
+
+If an AI can't show buttons, it sends the person `tapUrl`, a one-screen page with
+the same choices.
+
+## For harder cases: the human community
+
+When the person can't be asked (or picked "Something else"), the moment goes to
+people who use the app:
 
 1. **The agent records the moment it didn't understand** (the message, the
    conversation around it, its own guess) and sends it here with a question.
@@ -93,8 +123,10 @@ claude mcp add --transport http nuance HUB/mcp --header "Authorization: Bearer K
 The **Connect an AI** tab in the web app shows these with your real address and key
 filled in.
 
-MCP tools: `ask_humans_about_message`, `check_human_answer`, `find_similar_answers`,
-`get_learnings`. The `?key=` form exists for connector screens that can't set headers;
+MCP tools: `quick_check_meaning`, `record_user_choice`, `record_reaction` (the main
+flow), plus `ask_humans_about_message`, `check_human_answer`, `find_similar_answers` and
+`get_learnings`. The MCP server's instructions tell the AI to check only after an unclear
+reply, never make the person type, and act without asking when `shouldAsk` is false. The `?key=` form exists for connector screens that can't set headers;
 prefer the header where possible, since URLs can end up in logs.
 
 Some platforms (claude.ai and ChatGPT connectors for whole workspaces) prefer OAuth
@@ -110,8 +142,8 @@ sign-in for remote MCP servers. That's on the production list below.
   you've given yours, so they can't sway you.
 * **Trust score**: starts at 1.0, goes up when your answer matches the final
   consensus and down when it doesn't. Votes are weighted by trust.
-* **Share a moment**: post a conversation where an AI misread you, which AI it was,
-  and what you really meant. Your answer counts as the first vote.
+* **Share a moment**: paste what you said and tap what you meant, how you felt and which
+  AI it was. More detail is optional. Your answer counts as the first vote.
 * **Community**: totals, questions per AI platform, and the most trusted guides.
 * **Connect an AI**: register an agent and get copy-paste setup for each platform.
 
@@ -130,7 +162,39 @@ perplexity, pi_network, open_source, custom, other`.
 → `201 { "id": "agt_…", "apiKey": "nk_…", "connect": { "rest", "mcp", "openapi" } }`.
 The key is shown only once.
 
-### Ask about a message
+### Quick check (the main flow)
+`POST /api/v1/checks`, after the person's reply, only when unsure:
+```json
+{ "utterance": "Fantastic, late again.",
+  "context": [{ "speaker": "ai", "text": "Your package is delayed by two more days." }],
+  "consent": true }
+```
+→ `201`
+```json
+{
+  "id": "chk_…",
+  "shouldAsk": true,
+  "reason": "3 people in similar situations agreed so far. Asking until 5 have, to be sure.",
+  "prompt": "Quick check so I get this right. Did you mean…",
+  "options": [
+    { "id": "o1", "label": "I was being sarcastic 🙄", "intent": "sarcastic", "emotion": "annoyed", "learnedShare": 1, "basis": "learned" },
+    { "id": "o2", "label": "I meant it 😐", "intent": "sincere", "emotion": "neutral", "learnedShare": null, "basis": "default" },
+    { "id": "o3", "label": "Just joking 😄", "intent": "joking", "emotion": "amused", "learnedShare": null, "basis": "default" }
+  ],
+  "otherOption": { "id": "other", "label": "Something else" },
+  "suggested": { "intent": "sarcastic", "emotion": "annoyed", "confidence": 1 },
+  "whatWorked": [{ "response": "Sorry, that's genuinely frustrating. I've upgraded you…", "meaning": { "intent": "sarcastic" } }],
+  "tapUrl": "https://HUB/c/chk_…",
+  "reactions": { "helpful": "That helped", "missed": "Still missed the point", "tone": "Right idea, wrong tone" }
+}
+```
+* `shouldAsk: false` → don't ask; act on `suggested`.
+* `POST /api/v1/checks/:id/answer` `{ "optionId": "o1" }` (or `"other"` with optional `"otherText"`).
+* `POST /api/v1/checks/:id/reaction` `{ "reaction": "helpful", "aiResponse": "what you replied" }`.
+* The hosted tap page uses `GET/POST /api/checks/:id…` without a key; the long random id is the permission.
+* Learning settings (how alike situations must be, 5 people, 80%) are in `src/learning.js`.
+
+### Send a hard case to the community
 `POST /api/v1/queries`
 ```json
 {
@@ -215,6 +279,7 @@ people have answered, `consensus` holds:
 | File | What it does |
 |---|---|
 | `src/server.js` | HTTP server, API routes, static web app |
+| `src/learning.js` | Quick checks: ranks one-tap choices from past answers, decides when to stop asking |
 | `src/mcp.js` | MCP endpoint and tool definitions |
 | `src/openapi.js` | OpenAPI spec for GPT Actions, Gemini and others |
 | `src/analyzer.js` | Instant first answer: past answers → Claude → rules |
@@ -222,7 +287,7 @@ people have answered, `consensus` holds:
 | `src/taxonomy.js` | The shared label set (intents, emotions, …) |
 | `src/redact.js` | Removes personal details |
 | `src/store.js` | Small JSON-file database |
-| `public/` | The web app for human guides |
+| `public/` | The web app (`index.html`) and the hosted tap page (`check.html`) |
 | `examples/agent-client.js` | How an agent connects |
 | `test/` | `npm test` |
 
@@ -236,6 +301,8 @@ This is a working prototype. Before real users:
   Railway, a VM), or move the routes to serverless functions backed by a real database.
 * **Accounts**: labelers sign in with just a display name now. Add real sign-in
   (email or OAuth) and rate limits to stop spam and ballot stuffing.
+* **Smarter "similar situation" matching**: word overlap works for a prototype; text
+  embeddings would match "late again" with "delayed once more", and across languages.
 * **Quality control**: add "gold" questions with known answers to measure labelers,
   and show each question to people from different regions and languages. Sarcasm
   is cultural.

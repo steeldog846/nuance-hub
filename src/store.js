@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const EMPTY = () => ({ agents: [], labelers: [], queries: [], labels: [] });
+const EMPTY = () => ({ agents: [], labelers: [], queries: [], labels: [], checks: [] });
 
 export class Store {
   constructor(file) {

@@ -4,32 +4,79 @@
 // Studio, Cursor, VS Code, Gemini CLI, and agent frameworks such as the
 // OpenAI Agents SDK and LangChain. One endpoint therefore reaches all of them.
 
-import { INTENTS, EMOTIONS, DIFFICULTY_TYPES } from './taxonomy.js';
+import { INTENTS, EMOTIONS, DIFFICULTY_TYPES, REACTIONS } from './taxonomy.js';
 
 const SUPPORTED_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 
+const turns = {
+  type: 'array',
+  description: 'The turns just before it, oldest first (up to 20).',
+  items: {
+    type: 'object',
+    properties: { speaker: { type: 'string', enum: ['ai', 'human'] }, text: { type: 'string' } },
+    required: ['speaker', 'text'],
+  },
+};
+
 export const MCP_TOOLS = [
+  {
+    name: 'quick_check_meaning',
+    title: 'Check what the person meant, with one-tap choices',
+    description:
+      'Call this right AFTER the person replies, only when you are unsure whether they are sincere, sarcastic, joking, ' +
+      'annoyed and so on. Never ask in advance. It returns what people in similar situations meant. If shouldAsk is false, ' +
+      'act on "suggested" without bothering the person. If shouldAsk is true, show them "prompt" with the short options ' +
+      '(as buttons or a numbered list, plus "Something else") and pass their pick to record_user_choice. ' +
+      '"whatWorked" lists replies that helped others in the same spot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        utterance: { type: 'string', description: "The person's message you are unsure about." },
+        context: turns,
+        locale: { type: 'string' },
+        consent: { type: 'boolean', description: 'Must be true: the person agreed their anonymous answers help AIs learn.' },
+      },
+      required: ['utterance', 'consent'],
+    },
+  },
+  {
+    name: 'record_user_choice',
+    title: "Record which option the person tapped",
+    description: 'Send the option id the person picked (o1, o2, o3, or "other" with their words if they typed any).',
+    inputSchema: {
+      type: 'object',
+      properties: { check_id: { type: 'string' }, option_id: { type: 'string' }, other_text: { type: 'string' } },
+      required: ['check_id', 'option_id'],
+    },
+  },
+  {
+    name: 'record_reaction',
+    title: 'Record how your reply landed',
+    description:
+      `After you reply, offer the person three taps: ${Object.values(REACTIONS).map((r) => `"${r}"`).join(', ')}. ` +
+      'Send their pick and your reply. This teaches every AI what to say next time, and stops silent guesses that go wrong.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        check_id: { type: 'string' },
+        reaction: { type: 'string', enum: Object.keys(REACTIONS) },
+        ai_response: { type: 'string', description: 'What you replied after the check.' },
+      },
+      required: ['check_id', 'reaction'],
+    },
+  },
   {
     name: 'ask_humans_about_message',
     title: 'Ask people what a message really meant',
     description:
-      'Use when you cannot tell what a person really meant or felt: possible sarcasm, irony, a joke, ' +
-      'passive aggression, hidden frustration, slang or a cultural expression. Returns an instant best ' +
-      'guess and opens the question to human reviewers; check back later with check_human_answer. ' +
+      'For harder cases, or when you cannot ask the person: sends the moment to human reviewers. Returns an instant best ' +
+      'guess; check back later with check_human_answer. Prefer quick_check_meaning when the person is still in the chat. ' +
       'Only send conversations the person agreed to have reviewed, and remove names first.',
     inputSchema: {
       type: 'object',
       properties: {
         utterance: { type: 'string', description: 'The exact message you did not understand.' },
-        context: {
-          type: 'array',
-          description: 'The turns just before it, oldest first (up to 20).',
-          items: {
-            type: 'object',
-            properties: { speaker: { type: 'string', enum: ['ai', 'human'] }, text: { type: 'string' } },
-            required: ['speaker', 'text'],
-          },
-        },
+        context: turns,
         question: { type: 'string', description: 'What you want to know, e.g. "Is this sarcastic?"' },
         agent_guess: { type: 'string', description: 'Your own best guess, if any.' },
         difficulty: { type: 'string', enum: DIFFICULTY_TYPES },
@@ -80,10 +127,12 @@ export async function handleMcpMessage(msg, agent, service) {
       return rpcResult(id, {
         protocolVersion: SUPPORTED_VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : SUPPORTED_VERSIONS[0],
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'nuance-hub', title: 'Nuance Hub', version: '0.2.0' },
+        serverInfo: { name: 'nuance-hub', title: 'Nuance Hub', version: '0.3.0' },
         instructions:
-          'When a person\'s tone or meaning is unclear (sarcasm, irony, jokes, hidden emotion), call find_similar_answers, ' +
-          'then ask_humans_about_message if nothing matches. Treat the instant answer as a guess until check_human_answer says resolved.',
+          'When a person\'s reply leaves you unsure of their tone or meaning (sarcasm, irony, a joke, hidden annoyance), call ' +
+          'quick_check_meaning AFTER they reply. If it says shouldAsk=false, act on the suggestion. Otherwise show the short ' +
+          'options, record their tap with record_user_choice, reply, then offer the three reaction taps and call record_reaction. ' +
+          'Keep it light: never more than one quick check per reply, and never make the person type.',
       });
     case 'ping':
       return rpcResult(id, {});
@@ -99,7 +148,13 @@ export async function handleMcpMessage(msg, agent, service) {
 async function callTool(name, args, agent, service) {
   try {
     let data;
-    if (name === 'ask_humans_about_message') {
+    if (name === 'quick_check_meaning') {
+      data = await service.createCheck(agent, { utterance: args.utterance, context: args.context, locale: args.locale, consent: args.consent });
+    } else if (name === 'record_user_choice') {
+      data = await service.answerCheck(service.getCheck(agent, args.check_id), { optionId: args.option_id, otherText: args.other_text });
+    } else if (name === 'record_reaction') {
+      data = service.reactToCheck(service.getCheck(agent, args.check_id), { reaction: args.reaction, aiResponse: args.ai_response });
+    } else if (name === 'ask_humans_about_message') {
       data = await service.createQuery(agent, {
         utterance: args.utterance, context: args.context, question: args.question,
         agentGuess: args.agent_guess, difficulty: args.difficulty, locale: args.locale, consent: args.consent,

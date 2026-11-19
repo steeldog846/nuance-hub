@@ -35,3 +35,31 @@ export const PLATFORMS = [
   'claude', 'chatgpt', 'gemini', 'copilot', 'meta_ai', 'grok', 'mistral',
   'deepseek', 'perplexity', 'pi_network', 'open_source', 'custom', 'other',
 ];
+
+// Plain, first-person wording for one-tap choices shown to the person
+// right inside the conversation. Short on purpose: people tap, not type.
+export const INTENT_PHRASES = {
+  sincere: 'I meant it',
+  sarcastic: 'I was being sarcastic',
+  ironic: 'I was being ironic',
+  joking: 'Just joking',
+  passive_aggressive: "I'm actually annoyed",
+  rhetorical: "I wasn't really asking",
+  understatement: "It's a bigger deal than it sounds",
+  exaggeration: 'I was exaggerating',
+  polite_refusal: "That's a polite no",
+  unclear: 'Not sure myself',
+};
+
+export const EMOTION_EMOJI = {
+  happy: '😊', excited: '🤩', grateful: '🙏', amused: '😄', calm: '😌', neutral: '😐',
+  confused: '😕', surprised: '😮', anxious: '😟', sad: '😢', disappointed: '😞',
+  frustrated: '😤', annoyed: '🙄', angry: '😠', embarrassed: '😳', hurt: '💔',
+};
+
+// Quick reactions to what the AI did after it understood (or misunderstood).
+export const REACTIONS = {
+  helpful: 'That helped',
+  missed: 'Still missed the point',
+  tone: 'Right idea, wrong tone',
+};

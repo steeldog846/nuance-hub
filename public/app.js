@@ -30,7 +30,7 @@ async function api(path, { method = 'GET', body, token } = {}) {
 let taxonomy = null;
 let current = null;
 const choice = { intent: null, emotion: null };
-const shareChoice = { intent: null, emotion: null };
+const shareChoice = { intent: null, emotion: null, platform: null };
 let labelerToken = store.get('nuance.labeler');
 
 // ------------------------------------------------------------------ tabs
@@ -156,7 +156,6 @@ if (inPiBrowser) {
 $('signout').addEventListener('click', () => { labelerToken = null; store.set('nuance.labeler', null); show('signin'); });
 
 // ------------------------------------------------------------------ share a moment
-$('s-intensity').addEventListener('input', (e) => { $('s-intensity-out').textContent = e.target.value; });
 $('share').addEventListener('submit', async (e) => {
   e.preventDefault();
   const err = $('share-error'), ok = $('share-ok');
@@ -170,23 +169,20 @@ $('share').addEventListener('submit', async (e) => {
       method: 'POST',
       token: labelerToken,
       body: {
-        platform: $('s-platform').value,
+        platform: shareChoice.platform || 'other',
         context: parseTurns($('s-context').value),
         utterance: $('s-utterance').value,
         agentGuess: $('s-misread').value,
         intent: shareChoice.intent,
         emotion: shareChoice.emotion,
-        intensity: Number($('s-intensity').value),
         explanation: $('s-explanation').value,
         consent: true,
       },
     });
     $('share').reset();
-    $('s-intensity-out').textContent = '3';
-    shareChoice.intent = shareChoice.emotion = null;
-    chips($('s-intent-chips'), taxonomy.intents, 'intent', shareChoice);
-    chips($('s-emotion-chips'), taxonomy.emotions, 'emotion', shareChoice);
-    ok.textContent = 'Shared, thank you. Once two more people agree with you, every connected AI can learn from it.';
+    shareChoice.intent = shareChoice.emotion = shareChoice.platform = null;
+    renderShareChips();
+    ok.textContent = 'Shared, thank you. Once two more people agree, every connected AI learns from it.';
     ok.hidden = false;
   } catch (ex) { fail(ex.message); }
 });
@@ -263,19 +259,78 @@ $('register-agent').addEventListener('click', async () => {
   } catch (ex) { $('agent-key-out').textContent = ex.message; }
 });
 
-$('send-demo').addEventListener('click', async () => {
-  const out = $('demo-out');
-  out.hidden = false;
-  if (!agentKey) { out.textContent = 'Register an agent first.'; return; }
-  const context = parseTurns($('demo-context').value);
+// ------------------------------------------------------------------ chat demo
+// The person types a reply as usual; the AI only shows taps when it isn't sure.
+const DEMO_REPLIES = {
+  sarcastic: "Sorry, that's genuinely frustrating. I've upgraded you to express delivery at no cost.",
+  passive_aggressive: "I hear you, and I'm sorry. Let me fix this properly.",
+  sincere: 'Glad that works for you!',
+  joking: "Ha! I'll pass that on. Anything else I can help with?",
+};
+
+function bubble(cls, text) {
+  const d = document.createElement('div');
+  d.className = `bubble ${cls}`;
+  if (text) d.textContent = text;
+  $('chat').appendChild(d);
+  d.scrollIntoView({ block: 'nearest' });
+  return d;
+}
+
+function tapRow(parent, items, onPick) {
+  const row = document.createElement('div');
+  row.className = 'tap-row';
+  for (const [value, label] of items) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tap small';
+    b.textContent = label;
+    b.addEventListener('click', () => { row.querySelectorAll('button').forEach((x) => { x.disabled = true; }); b.classList.add('picked'); onPick(value); });
+    row.appendChild(b);
+  }
+  parent.appendChild(row);
+}
+
+async function ensureDemoAgent() {
+  if (agentKey) return agentKey;
+  const out = await api('/api/agents/register', { method: 'POST', body: { name: 'demo-chat', platform: 'custom' } });
+  agentKey = out.apiKey;
+  store.set('nuance.agentKey', agentKey);
+  return agentKey;
+}
+
+async function replyAndAskReaction(check, meaning) {
+  const said = check.whatWorked?.[0]?.response || DEMO_REPLIES[meaning?.intent] || 'Got it, thanks for telling me.';
+  bubble('ai', said);
+  const ask = bubble('ai soft', 'How did that land?');
+  tapRow(ask, Object.entries(check.reactions), async (reaction) => {
+    await api(`/api/v1/checks/${check.id}/reaction`, { method: 'POST', token: agentKey, body: { reaction, aiResponse: said } });
+    $('chat-note').textContent = 'Recorded. Send a similar message again to see what the AI learned.';
+  });
+}
+
+$('chat-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('chat-input').value.trim();
+  if (!text) return;
+  bubble('human', text);
   try {
-    const res = await api('/api/v1/queries', {
-      method: 'POST',
-      token: agentKey,
-      body: { utterance: $('demo-utterance').value, question: $('demo-question').value, context, consent: $('demo-consent').checked },
+    await ensureDemoAgent();
+    const context = [...$('chat').querySelectorAll('.bubble:not(.soft)')].slice(-6, -1)
+      .map((b) => ({ speaker: b.classList.contains('human') ? 'human' : 'ai', text: b.firstChild?.textContent || '' }))
+      .filter((t) => t.text);
+    const check = await api('/api/v1/checks', { method: 'POST', token: agentKey, body: { utterance: text, context, consent: true } });
+    if (!check.shouldAsk) {
+      $('chat-note').textContent = `Didn't need to ask: ${check.reason}`;
+      return replyAndAskReaction(check, check.suggested);
+    }
+    $('chat-note').textContent = check.reason;
+    const ask = bubble('ai soft', check.prompt);
+    tapRow(ask, [...check.options.map((o) => [o.id, o.label]), ['other', check.otherOption.label]], async (optionId) => {
+      await api(`/api/v1/checks/${check.id}/answer`, { method: 'POST', token: agentKey, body: { optionId } });
+      replyAndAskReaction(check, check.options.find((o) => o.id === optionId));
     });
-    out.textContent = JSON.stringify(res, null, 2);
-  } catch (ex) { out.textContent = ex.message; }
+  } catch (ex) { $('chat-note').textContent = ex.message; }
 });
 
 // ------------------------------------------------------------------ connection guides
@@ -342,6 +397,17 @@ async function loadStats() {
     d.children[1].textContent = label;
     $('stats').appendChild(d);
   }
+  const ar = $('ask-rate');
+  const c = s.checks;
+  ar.innerHTML = '';
+  const line = (label, v) => { const p = document.createElement('p'); p.innerHTML = '<span></span> <b></b>'; p.children[0].textContent = label; p.children[1].textContent = v; ar.appendChild(p); };
+  if (!c.total) line('No quick checks yet.', '');
+  else {
+    line('Quick checks so far:', `${c.total} (${c.answered} tapped)`);
+    line('How often the AI had to ask, at the start:', `${Math.round(c.earlyAskRate * 100)}%`);
+    line('…and lately:', `${Math.round(c.recentAskRate * 100)}%`);
+    line('Reactions:', `${c.reactions.helpful} helped · ${c.reactions.missed} missed · ${c.reactions.tone} wrong tone`);
+  }
   const bp = $('by-platform');
   bp.innerHTML = '';
   const total = Object.values(s.byPlatform).reduce((a, b) => a + b, 0);
@@ -367,10 +433,20 @@ async function loadStats() {
   }
 }
 
+function renderShareChips() {
+  const name = (p) => (PLATFORM_NAMES[p] || p).replace(/^(a|an) /, '').replace(/^./, (c) => c.toUpperCase());
+  chips($('s-platform-chips'), taxonomy.platforms, 'platform', shareChoice);
+  $('s-platform-chips').querySelectorAll('.chip').forEach((c, i) => { c.textContent = name(taxonomy.platforms[i]); });
+  chips($('s-intent-chips'), taxonomy.intents, 'intent', shareChoice);
+  $('s-intent-chips').querySelectorAll('.chip').forEach((c, i) => { c.textContent = taxonomy.intentPhrases?.[taxonomy.intents[i]] || c.textContent; });
+  chips($('s-emotion-chips'), taxonomy.emotions, 'emotion', shareChoice);
+  $('s-emotion-chips').querySelectorAll('.chip').forEach((c, i) => { c.textContent = `${taxonomy.emotionEmoji?.[taxonomy.emotions[i]] || ''} ${c.textContent}`.trim(); });
+}
+
 // ------------------------------------------------------------------ boot
 api('/api/taxonomy').then((t) => {
   taxonomy = t;
-  for (const sel of [$('s-platform'), $('agent-platform')]) {
+  for (const sel of [$('agent-platform')]) {
     for (const p of t.platforms) {
       const o = document.createElement('option');
       o.value = p;
@@ -378,7 +454,6 @@ api('/api/taxonomy').then((t) => {
       sel.appendChild(o);
     }
   }
-  chips($('s-intent-chips'), t.intents, 'intent', shareChoice);
-  chips($('s-emotion-chips'), t.emotions, 'emotion', shareChoice);
+  renderShareChips();
   loadTask();
 });

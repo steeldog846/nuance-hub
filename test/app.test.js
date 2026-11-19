@@ -167,7 +167,7 @@ test('MCP: any MCP-capable AI can ask and check questions', async () => {
   assert.equal((await mcp(reg.apiKey, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
 
   const list = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-  assert.deepEqual(list.data.result.tools.map((t) => t.name), ['ask_humans_about_message', 'check_human_answer', 'find_similar_answers', 'get_learnings']);
+  assert.deepEqual(list.data.result.tools.map((t) => t.name), ['quick_check_meaning', 'record_user_choice', 'record_reaction', 'ask_humans_about_message', 'check_human_answer', 'find_similar_answers', 'get_learnings']);
 
   const ask = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'ask_humans_about_message', arguments: { utterance: 'Sure, I LOVE waiting on hold.', consent: true } } });
   const created = ask.data.result.structuredContent;
@@ -239,4 +239,82 @@ test('people can share a moment an AI misread, and others confirm it', async () 
   const stats = await call('/api/stats');
   assert.ok(stats.data.byPlatform.chatgpt >= 1);
   assert.ok(stats.data.sharedByPeople >= 1);
+});
+
+test('quick checks: one tap, learns from each person, then stops asking', async () => {
+  const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'shop-assistant', platform: 'gemini' } });
+  const key = reg.apiKey;
+  const situation = (i) => ({
+    utterance: i % 2 ? 'Fantastic, the package is late again.' : 'Fantastic. The package is late again!',
+    context: [{ speaker: 'ai', text: 'Your package is delayed by two days.' }],
+    consent: true,
+  });
+
+  const first = await call('/api/v1/checks', { method: 'POST', token: key, body: situation(0) });
+  assert.equal(first.status, 201);
+  assert.equal(first.data.shouldAsk, true);
+  assert.ok(first.data.options.length >= 2 && first.data.options.length <= 3);
+  assert.ok(first.data.options.every((o) => o.label.length < 40), 'options are short enough to tap');
+  assert.match(first.data.tapUrl, /\/c\/chk_/);
+
+  // Five people in the same spot tap "sarcastic". The first one does it on the hosted tap page.
+  const pub = await call(`/api/checks/${first.data.id}`);
+  assert.equal(pub.data.answered, false);
+  assert.equal(pub.data.options[0].intent, undefined, 'tap page does not leak labels');
+  const sarcasticOpt = first.data.options.find((o) => o.intent === 'sarcastic');
+  await call(`/api/checks/${first.data.id}/answer`, { method: 'POST', body: { optionId: sarcasticOpt.id } });
+  assert.equal((await call(`/api/checks/${first.data.id}/answer`, { method: 'POST', body: { optionId: 'o1' } })).status, 409);
+  await call(`/api/checks/${first.data.id}/reaction`, { method: 'POST', body: { reaction: 'helpful' } });
+
+  for (let i = 1; i < 5; i++) {
+    const c = await call('/api/v1/checks', { method: 'POST', token: key, body: situation(i) });
+    assert.equal(c.data.shouldAsk, true, `still asking after ${i} answers`);
+    assert.equal(c.data.options[0].intent, 'sarcastic', 'learned choice moves to the top');
+    assert.equal(c.data.options[0].basis, 'learned');
+    await call(`/api/v1/checks/${c.data.id}/answer`, { method: 'POST', token: key, body: { optionId: c.data.options[0].id } });
+    await call(`/api/v1/checks/${c.data.id}/reaction`, {
+      method: 'POST', token: key,
+      body: { reaction: 'helpful', aiResponse: "Sorry, two delays is really frustrating. I've added free express shipping." },
+    });
+  }
+
+  // The sixth person isn't bothered: the AI already knows, and knows what reply worked.
+  const sixth = await call('/api/v1/checks', { method: 'POST', token: key, body: situation(5) });
+  assert.equal(sixth.data.shouldAsk, false);
+  assert.equal(sixth.data.suggested.intent, 'sarcastic');
+  assert.ok(sixth.data.whatWorked.length >= 1);
+
+  // ...but if silent guesses start missing, it goes back to asking.
+  await call(`/api/v1/checks/${sixth.data.id}/reaction`, { method: 'POST', token: key, body: { reaction: 'missed' } });
+  const seventh = await call('/api/v1/checks', { method: 'POST', token: key, body: situation(6) });
+  assert.equal(seventh.data.shouldAsk, true);
+
+  // "Something else" in their own words goes to the human community.
+  await call(`/api/v1/checks/${seventh.data.id}/answer`, { method: 'POST', token: key, body: { optionId: 'other', otherText: 'I was relieved, I wanted it later anyway' } });
+  const { data: lab } = await call('/api/labelers', { method: 'POST', body: { displayName: 'helper' } });
+  let found = false;
+  for (let t = (await call('/api/tasks/next', { token: lab.token })).data.task; t; t = (await call('/api/tasks/next', { token: lab.token })).data.task) {
+    if (t.origin === 'check') { found = true; assert.match(t.agentGuess, /relieved/); break; }
+    await call(`/api/queries/${t.id}/labels`, { method: 'POST', token: lab.token, body: { intent: 'unclear', emotion: 'neutral' } });
+  }
+  assert.ok(found);
+
+  // Self-reported taps become training data for every connected AI.
+  const { data } = await call('/api/v1/learnings', { token: key });
+  assert.ok(data.learnings.filter((l) => l.origin === 'self_reported').length >= 5);
+
+  const stats = await call('/api/stats');
+  assert.ok(stats.data.checks.total >= 7);
+  assert.ok(stats.data.checks.reactions.helpful >= 5);
+});
+
+test('quick checks over MCP', async () => {
+  const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'mcp-bot', platform: 'chatgpt' } });
+  const r = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'quick_check_meaning', arguments: { utterance: 'Wow, so helpful.', consent: true } } });
+  const check = r.data.result.structuredContent;
+  assert.ok(check.options.length);
+  const pick = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'record_user_choice', arguments: { check_id: check.id, option_id: 'o1' } } });
+  assert.equal(pick.data.result.structuredContent.recorded, true);
+  const react = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'record_reaction', arguments: { check_id: check.id, reaction: 'tone' } } });
+  assert.equal(react.data.result.structuredContent.reaction, 'tone');
 });

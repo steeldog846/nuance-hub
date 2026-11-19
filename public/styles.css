@@ -31,6 +31,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0;
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -163,3 +164,24 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   .bar { grid-template-columns: 6.5rem 1fr 2.5rem; }
   .turn { max-width: 100%; }
 }
+
+/* ---- chat demo + one-tap choices ---- */
+.chat { display: grid; gap: .5rem; padding: .75rem; background: var(--bg); border-radius: 12px; margin-bottom: .75rem; max-height: 460px; overflow-y: auto; }
+.bubble { padding: .5rem .8rem; border-radius: 14px; max-width: 88%; font-size: .95rem; }
+.bubble.ai { background: var(--surface); border: 1px solid var(--line); justify-self: start; }
+.bubble.human { background: var(--accent); color: var(--accent-ink); justify-self: end; }
+.bubble.soft { border-style: dashed; }
+.tap-row { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
+.tap {
+  background: var(--accent-soft); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 999px; padding: .5rem .9rem; text-align: left;
+}
+.tap:disabled { opacity: .45; cursor: default; }
+.tap.picked { opacity: 1; background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.more { margin: .25rem 0 1rem; }
+.more summary { cursor: pointer; color: var(--accent); font-size: .9rem; }
+
+/* ---- hosted tap page ---- */
+.tap-main { max-width: 440px; margin: 0 auto; padding: 1.5rem 16px; }
+.tap-options { display: grid; gap: .5rem; margin: 1rem 0; }
+.tap-options .tap { width: 100%; padding: .85rem 1rem; font-size: 1.05rem; border-radius: 12px; }

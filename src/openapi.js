@@ -3,7 +3,7 @@
 //   Gemini / Vertex AI, Microsoft Copilot Studio, Amazon Bedrock agents,
 //   LangChain, LlamaIndex, Semantic Kernel → any "OpenAPI tool" loader.
 
-import { INTENTS, EMOTIONS, DIFFICULTY_TYPES, MODALITIES, PLATFORMS } from './taxonomy.js';
+import { INTENTS, EMOTIONS, DIFFICULTY_TYPES, MODALITIES, PLATFORMS, REACTIONS } from './taxonomy.js';
 
 const Turn = {
   type: 'object',
@@ -50,7 +50,7 @@ export function openApiSpec(baseUrl) {
     openapi: '3.1.0',
     info: {
       title: 'Nuance Hub',
-      version: '0.2.0',
+      version: '0.3.0',
       description: 'Ask people what a message really meant (sarcasm, irony, emotion, intent) and learn from their answers.',
     },
     servers: [{ url: baseUrl }],
@@ -60,6 +60,55 @@ export function openApiSpec(baseUrl) {
     },
     security: [{ apiKey: [] }],
     paths: {
+      '/api/v1/checks': {
+        post: {
+          operationId: 'quickCheckMeaning',
+          summary: "Get one-tap choices for what the person meant (call AFTER their reply, only when unsure)",
+          description: 'If shouldAsk is false, act on "suggested". Otherwise show "prompt" and the options as buttons or a numbered list, then call recordUserChoice.',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: {
+              type: 'object',
+              properties: {
+                utterance: { type: 'string' },
+                context: { type: 'array', items: { $ref: '#/components/schemas/Turn' } },
+                locale: { type: 'string' },
+                consent: { type: 'boolean' },
+              },
+              required: ['utterance', 'consent'],
+            } } },
+          },
+          responses: { 201: { description: 'The quick check', content: { 'application/json': { schema: { type: 'object', properties: {
+            id: { type: 'string' }, shouldAsk: { type: 'boolean' }, reason: { type: 'string' }, prompt: { type: 'string' },
+            options: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, intent: { type: 'string' }, emotion: { type: 'string' } } } },
+            suggested: { type: 'object' }, whatWorked: { type: 'array', items: { type: 'object' } }, tapUrl: { type: 'string' },
+          } } } } } },
+        },
+      },
+      '/api/v1/checks/{id}/answer': {
+        post: {
+          operationId: 'recordUserChoice',
+          summary: 'Record which option the person tapped',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: {
+            type: 'object', properties: { optionId: { type: 'string' }, otherText: { type: 'string' } }, required: ['optionId'],
+          } } } },
+          responses: { 200: { description: 'Recorded' } },
+        },
+      },
+      '/api/v1/checks/{id}/reaction': {
+        post: {
+          operationId: 'recordReaction',
+          summary: 'Record how your reply landed',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: {
+            type: 'object',
+            properties: { reaction: { type: 'string', enum: Object.keys(REACTIONS) }, aiResponse: { type: 'string' } },
+            required: ['reaction'],
+          } } } },
+          responses: { 200: { description: 'Recorded' } },
+        },
+      },
       '/api/v1/queries': {
         post: {
           operationId: 'askHumansAboutMessage',
