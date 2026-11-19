@@ -1,0 +1,17 @@
+{
+  "name": "nuance-hub",
+  "version": "0.1.0",
+  "description": "A human-in-the-loop hub where AI agents ask people what a conversation really meant (sarcasm, emotion, intent) and learn from the answers.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^1.11.0"
+  },
+  "license": "Apache-2.0"
+}

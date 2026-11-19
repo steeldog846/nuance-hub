@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nuance Hub</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◐</span>
+      <div>
+        <h1>Nuance Hub</h1>
+        <p class="tag">Help AI understand what people really mean.</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-view="label" role="tab">Answer questions</button>
+      <button class="tab" data-view="agents" role="tab">For AI developers</button>
+      <button class="tab" data-view="community" role="tab">Community</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ============ LABEL ============ -->
+    <section id="view-label" class="view">
+      <div id="signin" class="card narrow" hidden>
+        <h2>Join as a human guide</h2>
+        <p class="muted">AI assistants send us moments they couldn't read — sarcasm, a joke, hidden frustration. You tell them what was really going on.</p>
+        <form id="signin-form" class="row">
+          <input id="displayName" placeholder="Pick a display name" maxlength="40" required autocomplete="nickname">
+          <button class="primary" type="submit">Start</button>
+        </form>
+      </div>
+
+      <div id="me-bar" class="me-bar" hidden>
+        <span>Signed in as <strong id="me-name"></strong></span>
+        <span class="pill" title="Rises when you agree with the final answer">Trust <strong id="me-rep"></strong></span>
+        <span class="pill">Answered <strong id="me-count"></strong></span>
+        <button class="link" id="signout">Sign out</button>
+      </div>
+
+      <div id="empty" class="card narrow center" hidden>
+        <h2>All caught up</h2>
+        <p class="muted">No questions are waiting right now. Check back soon, or send a sample question from the “For AI developers” tab.</p>
+        <button class="ghost" id="refresh">Check again</button>
+      </div>
+
+      <form id="task" class="card task" hidden>
+        <div class="task-head">
+          <span class="badge" id="t-difficulty"></span>
+          <span class="muted small" id="t-meta"></span>
+        </div>
+
+        <div class="convo" id="t-context"></div>
+        <blockquote class="utterance" id="t-utterance"></blockquote>
+
+        <div class="ask">
+          <span class="ask-label">The AI asks</span>
+          <p id="t-question"></p>
+          <p class="muted small" id="t-guess"></p>
+        </div>
+
+        <div class="app-answer">
+          <div class="app-answer-head">
+            <span>Our first guess <span class="muted small" id="t-source"></span></span>
+            <span class="conf" id="t-conf"></span>
+          </div>
+          <p><strong id="t-app-intent"></strong> · <strong id="t-app-emotion"></strong></p>
+          <p class="muted small" id="t-app-why"></p>
+          <fieldset class="verdict">
+            <legend>Is this guess right?</legend>
+            <label><input type="radio" name="verdict" value="correct"> Right</label>
+            <label><input type="radio" name="verdict" value="partly"> Partly</label>
+            <label><input type="radio" name="verdict" value="wrong"> Wrong</label>
+          </fieldset>
+        </div>
+
+        <fieldset>
+          <legend>What did they really mean?</legend>
+          <div class="chips" id="intent-chips"></div>
+        </fieldset>
+        <fieldset>
+          <legend>How did they feel?</legend>
+          <div class="chips" id="emotion-chips"></div>
+        </fieldset>
+        <fieldset>
+          <legend>How strongly? <span class="muted" id="intensity-out">3</span>/5</legend>
+          <input type="range" id="intensity" min="1" max="5" value="3">
+        </fieldset>
+        <fieldset>
+          <legend>Explain it to the AI <span class="muted small">(optional, but this is what helps most)</span></legend>
+          <textarea id="explanation" rows="3" maxlength="600" placeholder="e.g. “Great” plus a crashed laptop means the opposite — they're fed up."></textarea>
+        </fieldset>
+
+        <p class="error" id="task-error" hidden></p>
+        <div class="row end">
+          <button type="button" class="ghost" id="skip">Skip</button>
+          <button type="submit" class="primary">Send answer</button>
+        </div>
+      </form>
+
+      <div id="result" class="card task" hidden>
+        <h2 id="r-title"></h2>
+        <p class="muted" id="r-sub"></p>
+        <div id="r-bars"></div>
+        <div class="row end"><button class="primary" id="next">Next question</button></div>
+      </div>
+    </section>
+
+    <!-- ============ AGENTS ============ -->
+    <section id="view-agents" class="view" hidden>
+      <div class="card">
+        <h2>Connect your AI agent</h2>
+        <p>Your agent sends us a moment it didn't understand. We answer right away with our best guess, then people review it. When enough of them agree, your agent gets the final answer, and the example joins a shared dataset every connected agent can learn from.</p>
+        <ol class="flow">
+          <li><strong>Register</strong> once and get an API key.</li>
+          <li><strong>Ask</strong>: <code>POST /api/v1/queries</code> with the message, the conversation around it and your question.</li>
+          <li><strong>Get a first answer</strong> straight away, from past answers, Claude or built-in rules.</li>
+          <li><strong>People review it</strong>. They label intent and emotion and explain what was going on.</li>
+          <li><strong>Learn</strong>: a webhook fires when people agree, or poll <code>GET /api/v1/learnings</code>.</li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h3>Try it</h3>
+        <div class="row">
+          <input id="agent-name" placeholder="Agent name, e.g. support-bot" maxlength="100">
+          <button class="ghost" id="register-agent">Register agent</button>
+        </div>
+        <p class="small muted" id="agent-key-out"></p>
+
+        <label class="stack">Conversation so far (one line per turn, start with <code>ai:</code> or <code>human:</code>)
+          <textarea id="demo-context" rows="3">ai: Your laptop update finished installing.
+human: It restarted in the middle of my presentation.</textarea>
+        </label>
+        <label class="stack">The message the AI didn't understand
+          <input id="demo-utterance" value="Oh great, just perfect timing as always.">
+        </label>
+        <label class="stack">The AI's question
+          <input id="demo-question" value="Is the user happy with the timing or being sarcastic?">
+        </label>
+        <label class="row small"><input type="checkbox" id="demo-consent" checked> The person agreed to have this reviewed</label>
+        <div class="row end"><button class="primary" id="send-demo">Send question</button></div>
+        <pre class="code" id="demo-out" hidden></pre>
+      </div>
+
+      <div class="card">
+        <h3>API in one look</h3>
+        <pre class="code">POST /api/agents/register          {"name": "...", "webhookUrl": "https://..."}  → {apiKey}
+POST /api/v1/queries               Authorization: Bearer &lt;apiKey&gt;
+  {
+    "utterance":  "Oh great, another Monday.",
+    "context":    [{"speaker": "ai", "text": "..."}, {"speaker": "human", "text": "..."}],
+    "question":   "Is this sarcastic?",
+    "agentGuess": "happy",
+    "difficulty": "intent | emotion | language | expression | cultural | other",
+    "modality":   "text | voice_transcript | video_transcript | chat",
+    "locale":     "en",
+    "consent":    true
+  }                                → {id, status, appAnswer}
+GET  /api/v1/queries/:id           → {status, appAnswer, consensus}
+GET  /api/v1/learnings?since=ISO   → resolved examples from every agent
+GET  /api/v1/dataset.jsonl         → training file (one example per line)</pre>
+        <p class="small muted">Full docs are in <code>nuance/README.md</code>.</p>
+      </div>
+    </section>
+
+    <!-- ============ COMMUNITY ============ -->
+    <section id="view-community" class="view" hidden>
+      <div class="stats" id="stats"></div>
+      <div class="card">
+        <h3>Most trusted guides</h3>
+        <ol class="leaderboard" id="leaderboard"></ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot small muted">Messages are scrubbed of emails, phone numbers and links before anyone sees them.</footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
