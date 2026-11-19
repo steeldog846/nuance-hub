@@ -227,8 +227,13 @@ const bearer = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i,
 
 // ----------------------------------------------------------------- app
 
-export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join(__dirname, '..', 'data', 'db.json'), consensusOpts = DEFAULTS, fetchImpl = globalThis.fetch } = {}) {
-  const db = new Store(dataFile);
+export function createApp({
+  dataFile = process.env.NUANCE_DATA_FILE ?? path.join(__dirname, '..', 'data', 'db.json'),
+  databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || null,
+  consensusOpts = DEFAULTS,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const db = new Store({ file: dataFile, databaseUrl });
 
   const repOf = (labelerId) => db.find('labelers', (l) => l.id === labelerId)?.reputation ?? 1;
   const settled = () => db.filter('queries', (q) => q.status === 'resolved' || q.status === 'disputed');
@@ -486,7 +491,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
   // ------------------------------------------------------------- routes
 
   const routes = [
-    ['GET', /^\/api\/health$/, () => ({ ok: true, claude: claudeStatus() })],
+    ['GET', /^\/api\/health$/, () => ({ ok: true, claude: claudeStatus(), storage: db.kind })],
 
     ['GET', /^\/api\/taxonomy$/, () => ({
       intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES, platforms: PLATFORMS,
@@ -666,6 +671,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
     const batch = Array.isArray(payload);
     const svc = { ...service, createCheck: (ag, body) => service.createCheck(ag, body, baseUrl(req)) };
     const replies = (await Promise.all((batch ? payload : [payload]).map((m) => handleMcpMessage(m, agent, svc)))).filter(Boolean);
+    await db.commit();
     if (!replies.length) { res.writeHead(202); return res.end(); }
     send(res, 200, batch ? replies : replies[0]);
   }
@@ -680,13 +686,22 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       });
       return res.end();
     }
+    const dynamic = url.pathname === '/mcp' || url.pathname.startsWith('/api/') || url.pathname.endsWith('openapi.json');
+    if (!dynamic) return serveStatic(url.pathname, res);
+    try {
+      // Pick up what other server instances saved since this one last looked.
+      await db.sync();
+    } catch (err) {
+      console.error('[nuance] database unavailable:', err.message);
+      return send(res, 503, { error: 'Database unavailable, please try again shortly' });
+    }
     try {
       if (url.pathname === '/mcp') return await handleMcp(req, res, url);
-      if (!url.pathname.startsWith('/api/') && !url.pathname.endsWith('openapi.json')) return serveStatic(url.pathname, res);
       const route = routes.find(([m, re]) => m === req.method && re.test(url.pathname));
       if (!route) throw new HttpError(404, 'Not found');
       const body = req.method === 'POST' ? await readJson(req) : {};
       const out = await route[2](req, body, url.pathname.match(route[1]), url);
+      await db.commit(); // saved before the reply goes out
       if (out?.raw !== undefined) {
         res.writeHead(200, { 'content-type': out.type });
         return res.end(out.raw);
@@ -695,13 +710,22 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       send(res, wrapped ? out.status : 200, wrapped ? out.body : out);
     } catch (err) {
       if (!(err instanceof HttpError)) console.error(err);
+      await db.commit().catch((e) => console.error('[nuance] save failed:', e.message));
       send(res, err.status || 500, { error: err instanceof HttpError ? err.message : 'Internal error' });
     }
   }
 
   const server = http.createServer(handle);
   server.db = db;
+  server.handle = handle;
   return server;
+}
+
+// For hosts that call a function per request (Vercel): one app per server instance.
+let shared = null;
+export function requestHandler(req, res) {
+  shared ??= createApp({ dataFile: process.env.NUANCE_DATA_FILE ?? null });
+  return shared.handle(req, res);
 }
 
 // Is the AI asking less as it learns? Compare the oldest and newest checks.

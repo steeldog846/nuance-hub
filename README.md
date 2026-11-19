@@ -351,14 +351,30 @@ people have answered, `consensus` holds:
 | `examples/agent-client.js` | How an agent connects |
 | `test/` | `npm test` |
 
+## Hosting on Vercel
+
+`nuance/` is ready for Vercel: `api/index.js` handles every request that isn't a static
+file, and `vercel.json` routes them there.
+
+1. Create a Vercel project with **Root Directory** `nuance`.
+2. Add a Postgres database: Vercel → the project → **Storage** → **Create Database** →
+   **Neon** (free tier) → connect it to the project. That sets `DATABASE_URL`. The app
+   creates its own table on first use.
+3. Optionally add `ANTHROPIC_API_KEY` under Settings → Environment Variables.
+4. Deploy. `GET /api/health` shows `"storage": "postgres"` once the database is connected.
+
+Each request first pulls changes other server instances saved (one small query), then
+saves its own before replying, so many instances can run at once. Without a database the
+app still runs, but keeps answers only in memory (the Community tab warns about this).
+
+`npm run test:postgres` with `TEST_DATABASE_URL` set checks two instances sharing one database.
+
 ## Going to production
 
 This is a working prototype. Before real users:
 
-* **Database**: replace `src/store.js` with Postgres, SQLite or Firestore. The JSON
-  file won't survive serverless hosting such as Vercel, and won't scale past a few
-  thousand questions. Host the server somewhere persistent (Render, Fly.io,
-  Railway, a VM), or move the routes to serverless functions backed by a real database.
+* **Database scale**: Postgres storage keeps a full in-memory copy per server instance,
+  which is fine for tens of thousands of answers. Beyond that, move the lookups into SQL.
 * **Accounts**: labelers sign in with just a display name now. Add real sign-in
   (email or OAuth) and rate limits to stop spam and ballot stuffing.
 * **Smarter "similar situation" matching**: word overlap works for a prototype; text

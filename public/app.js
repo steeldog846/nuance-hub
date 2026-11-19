@@ -501,6 +501,9 @@ async function loadStats() {
   $('claude-status').textContent = health?.claude?.configured
     ? `Claude is connected (${health.claude.model}): it makes the first guess and reads people's own words in any language.${health.claude.lastError ? ` Last problem: ${health.claude.lastError}` : ''}`
     : 'Claude is not connected: built-in rules make the first guess and read English and common Hinglish words. Set ANTHROPIC_API_KEY to connect it.';
+  if (health?.storage === 'memory') {
+    $('claude-status').textContent += ' ⚠️ No database is connected, so answers are lost when the server restarts.';
+  }
   const ar = $('ask-rate');
   const c = s.checks;
   ar.innerHTML = '';
