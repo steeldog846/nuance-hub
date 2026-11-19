@@ -60,6 +60,7 @@
 
         <div class="convo" id="t-context"></div>
         <blockquote class="utterance" id="t-utterance"></blockquote>
+        <p class="small typing-note" id="t-typing" hidden></p>
 
         <div class="ask">
           <span class="ask-label">The AI asks</span>
@@ -83,11 +84,11 @@
         </div>
 
         <fieldset>
-          <legend>What did they really mean?</legend>
+          <legend>What did they really mean? <span class="muted small">(tap all that fit)</span></legend>
           <div class="chips" id="intent-chips"></div>
         </fieldset>
         <fieldset>
-          <legend>How did they feel?</legend>
+          <legend>How did they feel? <span class="muted small">(tap all that fit)</span></legend>
           <div class="chips" id="emotion-chips"></div>
         </fieldset>
         <fieldset>
@@ -118,18 +119,19 @@
     <section id="view-share" class="view" hidden>
       <form id="share" class="card">
         <h2>Share a moment an AI got wrong</h2>
-        <p class="muted">Did an assistant take your sarcasm literally or miss that you were upset? Paste what you said and tap what you meant. That's it.</p>
+        <p class="muted">Did an assistant take your sarcasm literally or miss that you were upset? Paste what you said, exactly as you typed it (CAPITALS and all), and tap what you meant. That's it.</p>
         <p class="small" id="share-signin-note" hidden>Sign in on the “Answer questions” tab first.</p>
 
         <label class="stack">What you said
-          <input id="s-utterance" required maxlength="2000" placeholder="Love this airline so much.">
+          <input id="s-utterance" required maxlength="2000" placeholder="Love this airline SO much.">
         </label>
+        <p class="small typing-note" id="s-typing" aria-live="polite"></p>
         <fieldset>
-          <legend>What you meant</legend>
+          <legend>What you meant <span class="muted small">(tap all that fit)</span></legend>
           <div class="chips" id="s-intent-chips"></div>
         </fieldset>
         <fieldset>
-          <legend>How you felt</legend>
+          <legend>How you felt <span class="muted small">(tap all that fit)</span></legend>
           <div class="chips" id="s-emotion-chips"></div>
         </fieldset>
         <fieldset>

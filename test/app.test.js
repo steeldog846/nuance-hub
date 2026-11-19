@@ -4,6 +4,7 @@ import { createApp } from '../src/server.js';
 import { redact } from '../src/redact.js';
 import { heuristicAnalyze, similarity } from '../src/analyzer.js';
 import { computeConsensus } from '../src/consensus.js';
+import { analyzeTyping } from '../src/style.js';
 
 delete process.env.ANTHROPIC_API_KEY; // keep tests offline
 
@@ -313,8 +314,81 @@ test('quick checks over MCP', async () => {
   const r = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'quick_check_meaning', arguments: { utterance: 'Wow, so helpful.', consent: true } } });
   const check = r.data.result.structuredContent;
   assert.ok(check.options.length);
-  const pick = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'record_user_choice', arguments: { check_id: check.id, option_id: 'o1' } } });
+  const pick = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'record_user_choice', arguments: { check_id: check.id, option_ids: ['o1', 'o2'], feelings: ['f1'] } } });
   assert.equal(pick.data.result.structuredContent.recorded, true);
   const react = await mcp(reg.apiKey, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'record_reaction', arguments: { check_id: check.id, reaction: 'tone' } } });
   assert.equal(react.data.result.structuredContent.reaction, 'tone');
+});
+
+test('typing style: capitals, shouting and mocking case are noticed', () => {
+  assert.equal(analyzeTyping('Fantastic, late again.').style, 'plain');
+  const stressed = analyzeTyping('fantastic, late AGAIN');
+  assert.equal(stressed.style, 'stressed_words');
+  assert.deepEqual(stressed.shoutedWords, ['AGAIN']);
+  assert.equal(analyzeTyping('FANTASTIC LATE AGAIN!!').style, 'all_caps');
+  assert.equal(analyzeTyping('FANTASTIC LATE AGAIN!!').emphasis, 3);
+  assert.equal(analyzeTyping('fAnTaStIc, LaTe AgAiN').style, 'mocking_case');
+  assert.equal(analyzeTyping('I use JavaScript on my iPhone. OK?').style, 'plain');
+  assert.equal(heuristicAnalyze('oH wOw, gReAt IdEa').intent, 'sarcastic');
+});
+
+test('people can pick several meanings and feelings', () => {
+  const c = computeConsensus([
+    { intents: ['sarcastic', 'teasing'], emotions: ['amused', 'smug'] },
+    { intents: ['sarcastic'], emotions: ['smug'] },
+    { intents: ['sarcastic', 'teasing'], emotions: ['angry'] },
+  ]);
+  assert.equal(c.intent, 'sarcastic');
+  assert.deepEqual(c.intents, ['sarcastic', 'teasing']);
+  assert.equal(c.intentDistribution.teasing, 0.667);
+  assert.deepEqual(c.emotions, ['smug']);
+  assert.equal(c.resolved, true);
+});
+
+test('multi-select works for labelers, shared moments and quick checks', async () => {
+  const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'multi', platform: 'claude' } });
+  const asked = await call('/api/v1/queries', { method: 'POST', token: reg.apiKey, body: { utterance: 'Nice parking, genius.', consent: true } });
+  const { data: lab } = await call('/api/labelers', { method: 'POST', body: { displayName: 'multi-lab' } });
+  const r = await call(`/api/queries/${asked.data.id}/labels`, { method: 'POST', token: lab.token, body: { intents: ['sarcastic', 'teasing'], emotions: ['smug', 'amused'] } });
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.data.consensus.intents, ['sarcastic', 'teasing']);
+  assert.equal((await call(`/api/queries/${asked.data.id}/labels`, { method: 'POST', token: lab.token, body: { intents: [] } })).status, 409);
+
+  const bad = await call('/api/moments', { method: 'POST', token: lab.token, body: { utterance: 'x', intents: [], emotions: ['angry'], consent: true } });
+  assert.equal(bad.status, 400);
+
+  const check = await call('/api/v1/checks', { method: 'POST', token: reg.apiKey, body: { utterance: 'Wow. Nice parking, GENIUS.', consent: true } });
+  assert.equal(check.data.typing.style, 'stressed_words');
+  assert.ok(check.data.feelingOptions.length >= 2);
+  const sarcastic = check.data.options.find((o) => o.intent === 'sarcastic');
+  const other = check.data.options.find((o) => o.intent !== 'sarcastic');
+  const smug = check.data.feelingOptions[0];
+  const ans = await call(`/api/v1/checks/${check.data.id}/answer`, { method: 'POST', token: reg.apiKey, body: { optionIds: [sarcastic.id, other.id], feelings: [smug.id] } });
+  assert.deepEqual(ans.data.choice.intents, [sarcastic.intent, other.intent]);
+  assert.deepEqual(ans.data.choice.emotions, [smug.emotion]);
+});
+
+test('the same words typed differently are learned separately', async () => {
+  const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'styles', platform: 'chatgpt' } });
+  const key = reg.apiKey;
+  const ctx = [{ speaker: 'ai', text: 'Your refund will take 30 days.' }];
+  const check = (utterance) => call('/api/v1/checks', { method: 'POST', token: key, body: { utterance, context: ctx, consent: true } });
+  const answer = async (c, intent, emotionIdx = 0) => {
+    const o = c.data.options.find((x) => x.intent === intent);
+    await call(`/api/v1/checks/${c.data.id}/answer`, { method: 'POST', token: key, body: { optionIds: [o.id], feelings: [c.data.feelingOptions[emotionIdx].id] } });
+  };
+
+  // Five people type it calmly and mean it sincerely (they are fine with it).
+  for (let i = 0; i < 5; i++) await answer(await check('ok thirty days for the refund, fine'), 'sincere');
+  const calm = await check('ok thirty days for the refund, fine');
+  assert.equal(calm.data.shouldAsk, false, 'calm typing: learned, no need to ask');
+  assert.equal(calm.data.suggested.intent, 'sincere');
+
+  // Typed in capitals it is a different situation: the AI asks again instead of assuming.
+  const loud = await check('OK THIRTY DAYS FOR THE REFUND, FINE!!');
+  assert.equal(loud.data.typing.style, 'all_caps');
+  assert.equal(loud.data.shouldAsk, true);
+  assert.match(loud.data.reason, /ALL CAPS/);
+  assert.ok(['angry', 'frustrated'].includes(loud.data.feelingOptions[0].emotion) || loud.data.feelingOptions.some((f) => f.emotion === 'angry'));
+  assert.ok(loud.data.suggested.intensity >= 4);
 });

@@ -185,3 +185,13 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .tap-main { max-width: 440px; margin: 0 auto; padding: 1.5rem 16px; }
 .tap-options { display: grid; gap: .5rem; margin: 1rem 0; }
 .tap-options .tap { width: 100%; padding: .85rem 1rem; font-size: 1.05rem; border-radius: 12px; }
+
+.typing-note { color: var(--warm); margin: -.5rem 0 1rem; min-height: 1em; }
+.tap[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); opacity: 1; }
+.tap-row.feel .tap { padding: .35rem .7rem; }
+.feel-prompt { margin-top: .6rem; }
+.done { margin-top: .6rem; padding: .45rem 1.1rem; }
+.done:disabled { opacity: .4; cursor: default; }
+.done-big { width: 100%; margin-top: 1rem; padding: .8rem; font-size: 1.05rem; }
+.done-big:disabled { opacity: .4; cursor: default; }
+#other-text { margin-bottom: .75rem; }

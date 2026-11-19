@@ -12,13 +12,14 @@ export const INTENTS = [
   'understatement',     // deliberately downplays
   'exaggeration',       // hyperbole
   'polite_refusal',     // "maybe later" meaning no
+  'teasing',            // playful jab, often a bit cocky
   'unclear',
 ];
 
 export const EMOTIONS = [
   'happy', 'excited', 'grateful', 'amused', 'calm', 'neutral',
   'confused', 'surprised', 'anxious', 'sad', 'disappointed',
-  'frustrated', 'annoyed', 'angry', 'embarrassed', 'hurt',
+  'frustrated', 'annoyed', 'angry', 'embarrassed', 'hurt', 'smug',
 ];
 
 // What part of the message the agent could not understand.
@@ -48,13 +49,14 @@ export const INTENT_PHRASES = {
   understatement: "It's a bigger deal than it sounds",
   exaggeration: 'I was exaggerating',
   polite_refusal: "That's a polite no",
+  teasing: 'I was teasing',
   unclear: 'Not sure myself',
 };
 
 export const EMOTION_EMOJI = {
   happy: '😊', excited: '🤩', grateful: '🙏', amused: '😄', calm: '😌', neutral: '😐',
   confused: '😕', surprised: '😮', anxious: '😟', sad: '😢', disappointed: '😞',
-  frustrated: '😤', annoyed: '🙄', angry: '😠', embarrassed: '😳', hurt: '💔',
+  frustrated: '😤', annoyed: '🙄', angry: '😠', embarrassed: '😳', hurt: '💔', smug: '😏',
 };
 
 // Quick reactions to what the AI did after it understood (or misunderstood).

@@ -1,3 +1,5 @@
+import { analyzeTyping } from '/lib/style.js';
+
 const $ = (id) => document.getElementById(id);
 const pretty = (s) => (s || '').replace(/_/g, ' ');
 const PLATFORM_NAMES = {
@@ -44,20 +46,45 @@ document.querySelectorAll('.tab').forEach((tab) => {
 });
 
 // ------------------------------------------------------------------ labeler
-function chips(container, values, field, target = choice) {
+// multi: tapping toggles, and target[field] is a list (people can pick several meanings and feelings).
+function chips(container, values, field, target = choice, { multi = false, label = pretty } = {}) {
   container.innerHTML = '';
+  target[field] = multi ? [] : null;
   for (const v of values) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'chip';
-    b.textContent = pretty(v);
+    b.textContent = label(v);
     b.setAttribute('aria-pressed', 'false');
     b.addEventListener('click', () => {
-      target[field] = v;
-      container.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
+      if (multi) {
+        const on = b.getAttribute('aria-pressed') !== 'true';
+        b.setAttribute('aria-pressed', String(on));
+        target[field] = on ? [...target[field], v] : target[field].filter((x) => x !== v);
+      } else {
+        target[field] = v;
+        container.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
+      }
     });
     container.appendChild(b);
   }
+}
+
+const emotionText = (e) => `${taxonomy.emotionEmoji?.[e] || ''} ${taxonomy.emotionLabels?.[e] || pretty(e)}`.trim();
+const intentText = (i) => taxonomy.intentPhrases?.[i] || pretty(i);
+const STYLE_NOTE = {
+  stressed_words: (t) => `Typed with ${t.shoutedWords.map((w) => `“${w}”`).join(', ')} in capitals`,
+  all_caps: () => 'Typed in ALL CAPITALS',
+  mocking_case: () => 'Typed in mOcKiNg case',
+  all_lower: () => 'Typed all in lowercase',
+};
+function typingNote(t) {
+  if (!t) return '';
+  const parts = [];
+  if (STYLE_NOTE[t.style]) parts.push(STYLE_NOTE[t.style](t));
+  if (t.exclamations >= 2) parts.push(`${t.exclamations} exclamation marks`);
+  if (t.elongated?.length) parts.push(`stretched: ${t.elongated.join(', ')}`);
+  return parts.length ? `✍️ ${parts.join(' · ')}` : '';
 }
 
 function show(...ids) {
@@ -98,6 +125,8 @@ function renderTask(t) {
     ctx.appendChild(d);
   }
   $('t-utterance').textContent = `“${t.utterance}”`;
+  $('t-typing').textContent = typingNote(t.typing);
+  $('t-typing').hidden = !$('t-typing').textContent;
   $('t-question').textContent = t.question;
   $('t-guess').textContent = t.agentGuess ? `${t.origin === 'person' ? 'What the AI did' : "The AI's own guess"}: ${t.agentGuess}` : '';
   const a = t.appAnswer;
@@ -110,9 +139,8 @@ function renderTask(t) {
   $('task').reset();
   $('intensity-out').textContent = '3';
   $('task-error').hidden = true;
-  choice.intent = choice.emotion = null;
-  chips($('intent-chips'), taxonomy.intents, 'intent');
-  chips($('emotion-chips'), taxonomy.emotions, 'emotion');
+  chips($('intent-chips'), taxonomy.intents, 'intents', choice, { multi: true });
+  chips($('emotion-chips'), taxonomy.emotions, 'emotions', choice, { multi: true, label: emotionText });
 }
 
 $('intensity').addEventListener('input', (e) => { $('intensity-out').textContent = e.target.value; });
@@ -162,7 +190,7 @@ $('share').addEventListener('submit', async (e) => {
   err.hidden = ok.hidden = true;
   const fail = (m) => { err.textContent = m; err.hidden = false; };
   if (!labelerToken) return fail('Sign in on the “Answer questions” tab first.');
-  if (!shareChoice.intent || !shareChoice.emotion) return fail('Pick what you meant and how you felt.');
+  if (!shareChoice.intents?.length || !shareChoice.emotions?.length) return fail('Tap at least one meaning and one feeling.');
   if (!$('s-consent').checked) return fail('Please confirm this is your conversation and names are removed.');
   try {
     await api('/api/moments', {
@@ -173,15 +201,15 @@ $('share').addEventListener('submit', async (e) => {
         context: parseTurns($('s-context').value),
         utterance: $('s-utterance').value,
         agentGuess: $('s-misread').value,
-        intent: shareChoice.intent,
-        emotion: shareChoice.emotion,
+        intents: shareChoice.intents,
+        emotions: shareChoice.emotions,
         explanation: $('s-explanation').value,
         consent: true,
       },
     });
     $('share').reset();
-    shareChoice.intent = shareChoice.emotion = shareChoice.platform = null;
     renderShareChips();
+    $('s-typing').textContent = '';
     ok.textContent = 'Shared, thank you. Once two more people agree, every connected AI learns from it.';
     ok.hidden = false;
   } catch (ex) { fail(ex.message); }
@@ -193,8 +221,8 @@ $('skip').addEventListener('click', loadTask); // skipping just fetches again; a
 $('task').addEventListener('submit', async (e) => {
   e.preventDefault();
   const err = $('task-error');
-  if (!choice.intent || !choice.emotion) {
-    err.textContent = 'Pick what they meant and how they felt.';
+  if (!choice.intents?.length || !choice.emotions?.length) {
+    err.textContent = 'Tap at least one meaning and one feeling.';
     err.hidden = false;
     return;
   }
@@ -203,8 +231,8 @@ $('task').addEventListener('submit', async (e) => {
       method: 'POST',
       token: labelerToken,
       body: {
-        intent: choice.intent,
-        emotion: choice.emotion,
+        intents: choice.intents,
+        emotions: choice.emotions,
         intensity: Number($('intensity').value),
         appAnswerVerdict: document.querySelector('input[name=verdict]:checked')?.value,
         explanation: $('explanation').value,
@@ -239,7 +267,7 @@ function renderResult({ status, consensus: c }) {
       bars.appendChild(row);
     });
   };
-  section('What they meant', c.intentDistribution);
+  section('What they meant (share of people who picked each)', c.intentDistribution);
   section('How they felt', c.emotionDistribution);
   show('me-bar', 'result');
 }
@@ -291,6 +319,49 @@ function tapRow(parent, items, onPick) {
   parent.appendChild(row);
 }
 
+// Tap one or several meanings (and optionally feelings), then "Done".
+function multiTap(parent, check, onDone) {
+  const picked = new Set(), feelings = new Set();
+  const row = (items, set, cls = '') => {
+    const r = document.createElement('div');
+    r.className = `tap-row ${cls}`;
+    for (const [id, label] of items) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tap small';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => {
+        const on = !set.has(id);
+        on ? set.add(id) : set.delete(id);
+        b.setAttribute('aria-pressed', String(on));
+        b.classList.toggle('picked', on);
+        done.disabled = !picked.size;
+      });
+      r.appendChild(b);
+    }
+    parent.appendChild(r);
+    return r;
+  };
+  const rows = [row([...check.options.map((o) => [o.id, o.label]), ['other', check.otherOption.label]], picked)];
+  const fp = document.createElement('div');
+  fp.className = 'small muted feel-prompt';
+  fp.textContent = check.feelingPrompt;
+  parent.appendChild(fp);
+  rows.push(row(check.feelingOptions.map((f) => [f.id, f.label]), feelings, 'feel'));
+  const done = document.createElement('button');
+  done.type = 'button';
+  done.className = 'primary small done';
+  done.textContent = 'Done';
+  done.disabled = true;
+  done.addEventListener('click', () => {
+    done.disabled = true;
+    rows.forEach((r) => r.querySelectorAll('button').forEach((b) => { b.disabled = true; }));
+    onDone({ optionIds: [...picked], feelings: [...feelings] });
+  });
+  parent.appendChild(done);
+}
+
 async function ensureDemoAgent() {
   if (agentKey) return agentKey;
   const out = await api('/api/agents/register', { method: 'POST', body: { name: 'demo-chat', platform: 'custom' } });
@@ -321,14 +392,14 @@ $('chat-form').addEventListener('submit', async (e) => {
       .filter((t) => t.text);
     const check = await api('/api/v1/checks', { method: 'POST', token: agentKey, body: { utterance: text, context, consent: true } });
     if (!check.shouldAsk) {
-      $('chat-note').textContent = `Didn't need to ask: ${check.reason}`;
+      $('chat-note').textContent = [typingNote(check.typing), `Didn't need to ask: ${check.reason}`].filter(Boolean).join(' — ');
       return replyAndAskReaction(check, check.suggested);
     }
-    $('chat-note').textContent = check.reason;
+    $('chat-note').textContent = [typingNote(check.typing), check.reason].filter(Boolean).join(' — ');
     const ask = bubble('ai soft', check.prompt);
-    tapRow(ask, [...check.options.map((o) => [o.id, o.label]), ['other', check.otherOption.label]], async (optionId) => {
-      await api(`/api/v1/checks/${check.id}/answer`, { method: 'POST', token: agentKey, body: { optionId } });
-      replyAndAskReaction(check, check.options.find((o) => o.id === optionId));
+    multiTap(ask, check, async ({ optionIds, feelings }) => {
+      await api(`/api/v1/checks/${check.id}/answer`, { method: 'POST', token: agentKey, body: { optionIds, feelings } });
+      replyAndAskReaction(check, check.options.find((o) => o.id === optionIds[0]));
     });
   } catch (ex) { $('chat-note').textContent = ex.message; }
 });
@@ -437,11 +508,11 @@ function renderShareChips() {
   const name = (p) => (PLATFORM_NAMES[p] || p).replace(/^(a|an) /, '').replace(/^./, (c) => c.toUpperCase());
   chips($('s-platform-chips'), taxonomy.platforms, 'platform', shareChoice);
   $('s-platform-chips').querySelectorAll('.chip').forEach((c, i) => { c.textContent = name(taxonomy.platforms[i]); });
-  chips($('s-intent-chips'), taxonomy.intents, 'intent', shareChoice);
-  $('s-intent-chips').querySelectorAll('.chip').forEach((c, i) => { c.textContent = taxonomy.intentPhrases?.[taxonomy.intents[i]] || c.textContent; });
-  chips($('s-emotion-chips'), taxonomy.emotions, 'emotion', shareChoice);
-  $('s-emotion-chips').querySelectorAll('.chip').forEach((c, i) => { c.textContent = `${taxonomy.emotionEmoji?.[taxonomy.emotions[i]] || ''} ${c.textContent}`.trim(); });
+  chips($('s-intent-chips'), taxonomy.intents, 'intents', shareChoice, { multi: true, label: intentText });
+  chips($('s-emotion-chips'), taxonomy.emotions, 'emotions', shareChoice, { multi: true, label: emotionText });
 }
+
+$('s-utterance').addEventListener('input', (e) => { $('s-typing').textContent = typingNote(analyzeTyping(e.target.value)); });
 
 // ------------------------------------------------------------------ boot
 api('/api/taxonomy').then((t) => {

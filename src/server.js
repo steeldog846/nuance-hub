@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
 import { redact } from './redact.js';
 import { analyze, similarity } from './analyzer.js';
-import { computeConsensus, updatedReputation, DEFAULTS } from './consensus.js';
+import { computeConsensus, updatedReputation, intentsOf, DEFAULTS } from './consensus.js';
+import { analyzeTyping, STYLES } from './style.js';
 import { handleMcpMessage } from './mcp.js';
 import { buildQuickCheck } from './learning.js';
 import { openApiSpec } from './openapi.js';
@@ -52,14 +53,27 @@ function parseContext(raw) {
   }));
 }
 
+// People may pick several meanings and feelings: "intents": [...], "emotions": [...].
+// A single "intent"/"emotion" still works.
+function tagList(body, many, one, valid, all) {
+  const raw = Array.isArray(body[many]) ? body[many] : body[one] !== undefined ? [body[one]] : [];
+  const list = [...new Set(raw)];
+  if (!list.length) throw new HttpError(400, `Pick at least one: "${many}" (any of ${all.join(', ')})`);
+  if (list.length > 5) throw new HttpError(400, `Pick at most 5 for "${many}"`);
+  for (const v of list) if (!valid(v)) throw new HttpError(400, `"${v}" is not one of ${all.join(', ')}`);
+  return list;
+}
+
 function parseLabel(body) {
-  if (!isValidIntent(body.intent)) throw new HttpError(400, `"intent" must be one of ${INTENTS.join(', ')}`);
-  if (!isValidEmotion(body.emotion)) throw new HttpError(400, `"emotion" must be one of ${EMOTIONS.join(', ')}`);
+  const intents = tagList(body, 'intents', 'intent', isValidIntent, INTENTS);
+  const emotions = tagList(body, 'emotions', 'emotion', isValidEmotion, EMOTIONS);
   const intensity = Number(body.intensity ?? 3);
   if (!Number.isInteger(intensity) || intensity < 1 || intensity > 5) throw new HttpError(400, '"intensity" must be 1-5');
   return {
-    intent: body.intent,
-    emotion: body.emotion,
+    intent: intents[0],
+    emotion: emotions[0],
+    intents,
+    emotions,
     intensity,
     explanation: redact(str(body.explanation, 'explanation', { max: 600, required: false })),
   };
@@ -91,6 +105,7 @@ function taskView(q) {
     origin: q.origin,
     platform: q.platform,
     utterance: q.utterance,
+    typing: q.typing,
     context: q.context,
     question: q.question,
     difficulty: q.difficulty,
@@ -108,11 +123,13 @@ function learningView(q) {
     id: q.id,
     origin: q.origin,
     platform: q.platform,
-    input: { context: q.context, utterance: q.utterance, locale: q.locale, modality: q.modality },
+    input: { context: q.context, utterance: q.utterance, typing: q.typing || analyzeTyping(q.utterance), locale: q.locale, modality: q.modality },
     ai_misreading: q.agentGuess || null,
     label: {
       intent: q.consensus.intent,
       emotion: q.consensus.emotion,
+      intents: q.consensus.intents || [q.consensus.intent],
+      emotions: q.consensus.emotions || [q.consensus.emotion],
       intensity: q.consensus.intensity,
       intent_distribution: q.consensus.intentDistribution,
       emotion_distribution: q.consensus.emotionDistribution,
@@ -132,8 +149,12 @@ function checkView(c, base) {
     reason: c.reason,
     prompt: c.prompt,
     options: c.options,
+    feelingPrompt: c.feelingPrompt,
+    feelingOptions: c.feelingOptions,
+    multiSelect: true,
     otherOption: c.otherOption,
     suggested: c.suggested,
+    typing: c.typing,
     evidence: c.evidence,
     whatWorked: c.whatWorked,
     whatMissed: c.whatMissed,
@@ -149,6 +170,8 @@ function checkView(c, base) {
 function publicCheckView(c) {
   return {
     id: c.id, utterance: c.utterance, prompt: c.prompt, options: c.options.map(({ id, label }) => ({ id, label })),
+    feelingPrompt: c.feelingPrompt,
+    feelingOptions: (c.feelingOptions || []).map(({ id, label }) => ({ id, label })),
     otherOption: c.otherOption, answered: Boolean(c.answeredAt), reacted: Boolean(c.reaction), reactions: REACTIONS,
   };
 }
@@ -156,12 +179,14 @@ function publicCheckView(c) {
 // The person's own tap is the strongest label there is: they know what they meant.
 function checkLearningView(c) {
   const meaning = c.choice || (c.reaction === 'helpful' ? c.suggested : null);
+  const intents = meaning.intents || [meaning.intent];
+  const emotions = meaning.emotions || [meaning.emotion];
   return {
     id: c.id,
     origin: c.choice ? 'self_reported' : 'confirmed_by_reaction',
     platform: c.platform,
-    input: { context: c.context, utterance: c.utterance, locale: c.locale, modality: 'chat' },
-    label: { intent: meaning.intent, emotion: meaning.emotion, agreement: 1, human_explanations: [] },
+    input: { context: c.context, utterance: c.utterance, typing: c.typing, locale: c.locale, modality: 'chat' },
+    label: { intent: intents[0], emotion: emotions[0], intents, emotions, agreement: 1, human_explanations: [] },
     ai_follow_up: c.aiFollowUp ? { response: c.aiFollowUp, reaction: c.reaction } : null,
     status: 'resolved',
     resolved_at: c.answeredAt || c.reactedAt,
@@ -243,7 +268,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       for (const l of labels) {
         const labeler = db.find('labelers', (x) => x.id === l.labelerId);
         if (!labeler) continue;
-        const agreed = l.intent === consensus.intent;
+        const agreed = intentsOf(l).includes(consensus.intent);
         db.update('labelers', labeler.id, {
           reputation: updatedReputation(labeler.reputation, agreed),
           agreed: labeler.agreed + (agreed ? 1 : 0),
@@ -279,6 +304,7 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       consensus: null,
       createdAt: now(),
     };
+    q.typing = analyzeTyping(q.utterance);
     q.appAnswer = await analyze(q, resolvedQueries());
     return db.insert('queries', q);
   }
@@ -313,8 +339,10 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       if (body.consent !== true) {
         throw new HttpError(400, '"consent": true is required — the person agreed that their anonymous answers help AIs learn');
       }
+      const utterance = redact(str(body.utterance, 'utterance'));
       const situation = {
-        utterance: redact(str(body.utterance, 'utterance')),
+        utterance,                       // kept exactly as typed: capitals are part of the meaning
+        typing: analyzeTyping(utterance),
         context: parseContext(body.context),
         locale: str(body.locale, 'locale', { max: 20, required: false }) || 'en',
       };
@@ -345,9 +373,27 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
 
     async answerCheck(c, body) {
       if (c.answeredAt) throw new HttpError(409, 'Already answered');
-      const optionId = str(body.optionId, 'optionId', { max: 20 });
+      // One or several taps: "optionIds": ["o1", "o3"], plus optional "feelings": ["f2"].
+      const optionIds = [...new Set(Array.isArray(body.optionIds) ? body.optionIds : [str(body.optionId, 'optionId', { max: 20 })])];
+      if (!optionIds.length) throw new HttpError(400, 'Pick at least one option');
       const patch = { answeredAt: now(), asked: true };
-      if (optionId === 'other') {
+      const picked = optionIds.filter((id) => id !== 'other').map((id) => {
+        const opt = c.options.find((o) => o.id === id);
+        if (!opt) throw new HttpError(400, `"${id}" must be one of ${[...c.options.map((o) => o.id), 'other'].join(', ')}`);
+        return opt;
+      });
+      const feelings = (Array.isArray(body.feelings) ? body.feelings : []).map((id) => {
+        const f = (c.feelingOptions || []).find((x) => x.id === id);
+        if (!f) throw new HttpError(400, `"${id}" is not one of the feeling options`);
+        return f.emotion;
+      });
+      if (picked.length) {
+        const intents = picked.map((o) => o.intent);
+        // Feelings the person tapped win; otherwise each meaning brings its usual feeling.
+        const emotions = [...new Set(feelings.length ? feelings : picked.map((o) => o.emotion))];
+        patch.choice = { intent: intents[0], emotion: emotions[0], intents, emotions };
+      }
+      if (optionIds.includes('other')) {
         patch.otherText = redact(str(body.otherText, 'otherText', { max: 300, required: false }));
         // "Something else" is exactly what the community is for: let people work it out.
         if (patch.otherText) {
@@ -358,10 +404,6 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
             { origin: 'check', platform: c.platform },
           );
         }
-      } else {
-        const opt = c.options.find((o) => o.id === optionId);
-        if (!opt) throw new HttpError(400, `"optionId" must be one of ${[...c.options.map((o) => o.id), 'other'].join(', ')}`);
-        patch.choice = { intent: opt.intent, emotion: opt.emotion };
       }
       db.update('checks', c.id, patch);
       return { recorded: true, choice: c.choice, otherText: c.otherText || null, next: 'Reply to the person with this in mind, then send their reaction to /reaction.' };
@@ -387,7 +429,8 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
 
     ['GET', /^\/api\/taxonomy$/, () => ({
       intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES, platforms: PLATFORMS,
-      intentPhrases: INTENT_PHRASES, emotionEmoji: EMOTION_EMOJI, reactions: REACTIONS,
+      intentPhrases: INTENT_PHRASES, emotionEmoji: EMOTION_EMOJI, emotionLabels: { smug: 'cocky / smug' }, reactions: REACTIONS,
+      typingStyles: STYLES,
     })],
 
     ['GET', /^\/(openapi\.json|\.well-known\/openapi\.json)$/, (req) => openApiSpec(baseUrl(req))],
@@ -646,6 +689,11 @@ function readJson(req) {
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.md': 'text/markdown' };
 
 function serveStatic(pathname, res) {
+  // The typing-style detector runs in the browser too (live note on the Share tab).
+  if (pathname === '/lib/style.js') {
+    res.writeHead(200, { 'content-type': 'text/javascript' });
+    return fs.createReadStream(path.join(__dirname, 'style.js')).pipe(res);
+  }
   const rel = pathname === '/' ? 'index.html' : /^\/c\/chk_\w+$/.test(pathname) ? 'check.html' : pathname.slice(1);
   const file = path.resolve(PUBLIC_DIR, rel);
   if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {

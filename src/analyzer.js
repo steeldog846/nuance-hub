@@ -6,6 +6,7 @@
 // The result is shown to human labelers, who confirm or correct it.
 
 import { INTENTS, EMOTIONS } from './taxonomy.js';
+import { analyzeTyping } from './style.js';
 
 // ---------------------------------------------------------------- heuristic
 
@@ -38,19 +39,24 @@ const BAD_SITUATION = /\b(crash|broke|broken|fail|failed|late|delay|restart|lost
 
 export function heuristicAnalyze(utterance, context = []) {
   const text = utterance || '';
+  const typing = analyzeTyping(text);
+  if (typing.style === 'mocking_case') {
+    return { source: 'heuristic', intent: 'sarcastic', emotion: 'annoyed', confidence: 0.6, explanation: 'Mixed-up capitals (mOcKiNg case) usually mean mockery.' };
+  }
+  const loud = typing.emphasis >= 2;
   // Praise right after the person described something going wrong is the most common sarcasm pattern.
   const lastHuman = [...context].reverse().find((t) => t.speaker === 'human')?.text || '';
   if (POSITIVE.test(text) && BAD_SITUATION.test(lastHuman) && !BAD_SITUATION.test(text)) {
-    return { source: 'heuristic', intent: 'sarcastic', emotion: 'frustrated', confidence: 0.5, explanation: 'Positive words right after the person described something going wrong.' };
+    return { source: 'heuristic', intent: 'sarcastic', emotion: loud ? 'angry' : 'frustrated', confidence: 0.5, explanation: `Positive words right after the person described something going wrong${loud ? ', typed loudly' : ''}.` };
   }
   for (const cue of CUES) {
     if (cue.re.test(text)) {
       return {
         source: 'heuristic',
         intent: cue.intent,
-        emotion: cue.emotion,
+        emotion: loud && ['annoyed', 'frustrated'].includes(cue.emotion) ? 'angry' : cue.emotion,
         confidence: 0.45,
-        explanation: `Cue detected: ${cue.why}.`,
+        explanation: `Cue detected: ${cue.why}${typing.note ? `; ${typing.note}` : ''}.`,
       };
     }
   }

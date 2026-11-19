@@ -15,14 +15,22 @@ People won't type out what an AI got wrong, so they don't have to.
 
 1. The person replies as usual. **Only if** the AI is unsure what they meant, it
    calls Nuance Hub, *after* the reply, never in advance.
-2. Nuance Hub sends back **two or three one-tap choices** in plain words
+2. Nuance Hub sends back **two or three short choices** in plain words
    ("I was being sarcastic 🙄", "I meant it 😐", "Just joking 😄", "Something else"),
-   **ranked by what earlier people in similar situations meant**.
-3. The person taps one. The AI replies with that in mind, using `whatWorked`:
+   **ranked by what earlier people in similar situations meant**, plus an optional row
+   of feelings ("😠 angry", "😏 cocky", "😄 amused"…).
+3. The person **taps everything that fits** (being sarcastic *and* teasing, angry *and*
+   hurt) and presses Done. The AI replies with that in mind, using `whatWorked`:
    replies that helped other people in the same spot.
 4. One more tap on how the reply landed: "That helped", "Still missed the
    point" or "Right idea, wrong tone".
-5. **It gets better with every person.** Once 5 people in similar situations
+5. **How it was typed counts.** The message is kept exactly as typed, and the hub notices
+   CAPITALS on a word ("late AGAIN"), ALL CAPS, mOcKiNg case, "!!!" and stretched words
+   ("sooo"). It learns separately what people mean when they type each way: normal and
+   all-lowercase typing share lessons, but a shouted or mocking version of the same words
+   is a new situation until enough people have answered for it. Typing style also shapes
+   the suggested feelings (all caps → angry, frustrated) and the suggested intensity.
+6. **It gets better with every person.** Once 5 people in similar situations
    agree (80% or more), the AI stops asking and acts on what it learned
    (`shouldAsk: false`). If those silent guesses start missing, it asks again.
    "Something else" answers go to the human community to work out.
@@ -33,6 +41,13 @@ for every connected AI.
 
 If an AI can't show buttons, it sends the person `tapUrl`, a one-screen page with
 the same choices.
+
+## Several answers at once
+
+Everywhere people answer (quick checks, the tap page, Share a moment, Answer questions),
+they can pick several meanings and feelings. Results report, for each one, the share of
+people who picked it, and the answer includes every meaning or feeling at least half of
+them picked (`intents`, `emotions`), alongside the leading one (`intent`, `emotion`).
 
 ## For harder cases: the human community
 
@@ -188,8 +203,10 @@ The key is shown only once.
   "reactions": { "helpful": "That helped", "missed": "Still missed the point", "tone": "Right idea, wrong tone" }
 }
 ```
-* `shouldAsk: false` → don't ask; act on `suggested`.
-* `POST /api/v1/checks/:id/answer` `{ "optionId": "o1" }` (or `"other"` with optional `"otherText"`).
+* `shouldAsk: false` → don't ask; act on `suggested` (which can hold several `intents`/`emotions`, and an `intensity`).
+* `typing` describes how the message was typed (`style`: plain, stressed_words, all_caps, all_lower, mocking_case; `emphasis` 0-3; `shoutedWords`; …). Send the message exactly as typed.
+* `feelingOptions` (`f1`…`f4`) are the optional feelings row.
+* `POST /api/v1/checks/:id/answer` `{ "optionIds": ["o1", "o3"], "feelings": ["f2"] }` (`"other"` with optional `"otherText"` is allowed too; a single `"optionId"` still works).
 * `POST /api/v1/checks/:id/reaction` `{ "reaction": "helpful", "aiResponse": "what you replied" }`.
 * The hosted tap page uses `GET/POST /api/checks/:id…` without a key; the long random id is the permission.
 * Learning settings (how alike situations must be, 5 people, 80%) are in `src/learning.js`.
@@ -279,6 +296,7 @@ people have answered, `consensus` holds:
 | File | What it does |
 |---|---|
 | `src/server.js` | HTTP server, API routes, static web app |
+| `src/style.js` | Notices how a message was typed: CAPITALS, ALL CAPS, mOcKiNg case, "!!!", "sooo" |
 | `src/learning.js` | Quick checks: ranks one-tap choices from past answers, decides when to stop asking |
 | `src/mcp.js` | MCP endpoint and tool definitions |
 | `src/openapi.js` | OpenAPI spec for GPT Actions, Gemini and others |

@@ -26,12 +26,14 @@ export const MCP_TOOLS = [
       'Call this right AFTER the person replies, only when you are unsure whether they are sincere, sarcastic, joking, ' +
       'annoyed and so on. Never ask in advance. It returns what people in similar situations meant. If shouldAsk is false, ' +
       'act on "suggested" without bothering the person. If shouldAsk is true, show them "prompt" with the short options ' +
-      '(as buttons or a numbered list, plus "Something else") and pass their pick to record_user_choice. ' +
+      '(as buttons or a numbered list, plus "Something else"; they may pick several), optionally the feelingOptions, ' +
+      'and pass their picks to record_user_choice. "typing" says how the message was typed (CAPITALS, mOcKiNg case, ' +
+      '"!!!"), which changes the meaning. Pass the message exactly as typed; never change its capitals. ' +
       '"whatWorked" lists replies that helped others in the same spot.',
     inputSchema: {
       type: 'object',
       properties: {
-        utterance: { type: 'string', description: "The person's message you are unsure about." },
+        utterance: { type: 'string', description: "The person's message you are unsure about, exactly as typed (keep CAPITALS, !!!, emoji)." },
         context: turns,
         locale: { type: 'string' },
         consent: { type: 'boolean', description: 'Must be true: the person agreed their anonymous answers help AIs learn.' },
@@ -41,12 +43,19 @@ export const MCP_TOOLS = [
   },
   {
     name: 'record_user_choice',
-    title: "Record which option the person tapped",
-    description: 'Send the option id the person picked (o1, o2, o3, or "other" with their words if they typed any).',
+    title: 'Record what the person tapped',
+    description:
+      'People may tap several meanings (e.g. sarcastic AND teasing) and several feelings. Send every option id they ' +
+      'picked (o1, o2, o3, or "other" with their words if they typed any), plus any feeling ids (f1, f2, ...).',
     inputSchema: {
       type: 'object',
-      properties: { check_id: { type: 'string' }, option_id: { type: 'string' }, other_text: { type: 'string' } },
-      required: ['check_id', 'option_id'],
+      properties: {
+        check_id: { type: 'string' },
+        option_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        feelings: { type: 'array', items: { type: 'string' } },
+        other_text: { type: 'string' },
+      },
+      required: ['check_id', 'option_ids'],
     },
   },
   {
@@ -151,7 +160,8 @@ async function callTool(name, args, agent, service) {
     if (name === 'quick_check_meaning') {
       data = await service.createCheck(agent, { utterance: args.utterance, context: args.context, locale: args.locale, consent: args.consent });
     } else if (name === 'record_user_choice') {
-      data = await service.answerCheck(service.getCheck(agent, args.check_id), { optionId: args.option_id, otherText: args.other_text });
+      const optionIds = args.option_ids || (args.option_id ? [args.option_id] : []);
+      data = await service.answerCheck(service.getCheck(agent, args.check_id), { optionIds, feelings: args.feelings, otherText: args.other_text });
     } else if (name === 'record_reaction') {
       data = service.reactToCheck(service.getCheck(agent, args.check_id), { reaction: args.reaction, aiResponse: args.ai_response });
     } else if (name === 'ask_humans_about_message') {

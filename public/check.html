@@ -13,10 +13,10 @@
       <blockquote class="utterance" id="said"></blockquote>
       <h2 id="prompt">Quick check…</h2>
       <div class="tap-options" id="options"></div>
-      <form id="other-form" class="row" hidden>
-        <input id="other-text" maxlength="300" placeholder="In a few words (optional)">
-        <button class="primary" type="submit">Send</button>
-      </form>
+      <input id="other-text" maxlength="300" placeholder="Something else? In a few words (optional)" hidden>
+      <p class="muted small" id="feel-prompt" hidden></p>
+      <div class="chips" id="feelings"></div>
+      <button class="primary done-big" id="done-btn" type="button" hidden disabled>Done</button>
       <p class="error" id="err" hidden></p>
     </div>
     <div class="card tap-card center" id="done" hidden>
@@ -32,11 +32,19 @@
       .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error); return d; });
     const finish = (title, sub) => { $('card').hidden = true; $('done').hidden = false; if (title) $('done-title').textContent = title; if (sub) $('done-sub').textContent = sub; };
     const fail = (e) => { $('err').textContent = e.message; $('err').hidden = false; };
-    const button = (label, onClick) => {
+    const button = (label, onClick, parent = $('options'), cls = 'tap') => {
       const b = document.createElement('button');
-      b.type = 'button'; b.className = 'tap'; b.textContent = label;
-      b.addEventListener('click', onClick);
-      $('options').appendChild(b);
+      b.type = 'button'; b.className = cls; b.textContent = label;
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => onClick(b));
+      parent.appendChild(b);
+    };
+    // Tap to toggle; several can be picked.
+    const toggler = (set, id, after) => (b) => {
+      const on = !set.has(id);
+      on ? set.add(id) : set.delete(id);
+      b.setAttribute('aria-pressed', String(on));
+      after?.();
     };
 
     const res = await fetch(`/api/checks/${id}`);
@@ -51,11 +59,22 @@
       $('said').textContent = `“${c.utterance}”`;
       if (c.answered) finish('Thanks, already noted.');
       $('prompt').textContent = c.prompt;
-      for (const o of c.options) button(o.label, () => post('answer', { optionId: o.id }).then(() => finish()).catch(fail));
-      button(c.otherOption.label, () => { $('other-form').hidden = false; $('other-text').focus(); });
-      $('other-form').addEventListener('submit', (e) => {
-        e.preventDefault();
-        post('answer', { optionId: 'other', otherText: $('other-text').value }).then(() => finish()).catch(fail);
+      const picked = new Set(), feelings = new Set();
+      const refresh = () => {
+        $('done-btn').disabled = !picked.size;
+        $('other-text').hidden = !picked.has('other');
+      };
+      for (const o of c.options) button(o.label, toggler(picked, o.id, refresh));
+      button(c.otherOption.label, toggler(picked, 'other', refresh));
+      if (c.feelingOptions.length) {
+        $('feel-prompt').textContent = c.feelingPrompt;
+        $('feel-prompt').hidden = false;
+        for (const f of c.feelingOptions) button(f.label, toggler(feelings, f.id), $('feelings'), 'chip');
+      }
+      $('done-btn').hidden = false;
+      $('done-btn').addEventListener('click', () => {
+        post('answer', { optionIds: [...picked], feelings: [...feelings], otherText: $('other-text').value })
+          .then(() => finish()).catch(fail);
       });
     }
   </script>

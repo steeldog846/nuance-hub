@@ -70,7 +70,7 @@ export function openApiSpec(baseUrl) {
             content: { 'application/json': { schema: {
               type: 'object',
               properties: {
-                utterance: { type: 'string' },
+                utterance: { type: 'string', description: 'Exactly as typed: CAPITALS and punctuation change the meaning.' },
                 context: { type: 'array', items: { $ref: '#/components/schemas/Turn' } },
                 locale: { type: 'string' },
                 consent: { type: 'boolean' },
@@ -91,7 +91,13 @@ export function openApiSpec(baseUrl) {
           summary: 'Record which option the person tapped',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: { required: true, content: { 'application/json': { schema: {
-            type: 'object', properties: { optionId: { type: 'string' }, otherText: { type: 'string' } }, required: ['optionId'],
+            type: 'object',
+            properties: {
+              optionIds: { type: 'array', items: { type: 'string' }, description: 'Every meaning tapped (several allowed)' },
+              feelings: { type: 'array', items: { type: 'string' }, description: 'Feeling option ids tapped (optional)' },
+              otherText: { type: 'string' },
+            },
+            required: ['optionIds'],
           } } } },
           responses: { 200: { description: 'Recorded' } },
         },
