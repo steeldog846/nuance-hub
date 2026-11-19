@@ -6,14 +6,17 @@ import { fileURLToPath } from 'node:url';
 
 import { Store } from './store.js';
 import { redact } from './redact.js';
-import { analyze } from './analyzer.js';
+import { analyze, similarity } from './analyzer.js';
 import { computeConsensus, updatedReputation, DEFAULTS } from './consensus.js';
-import { INTENTS, EMOTIONS, DIFFICULTY_TYPES, MODALITIES, isValidIntent, isValidEmotion } from './taxonomy.js';
+import { handleMcpMessage } from './mcp.js';
+import { openApiSpec } from './openapi.js';
+import { INTENTS, EMOTIONS, DIFFICULTY_TYPES, MODALITIES, PLATFORMS, isValidIntent, isValidEmotion } from './taxonomy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MAX_LABELS = 7;        // after this many votes without agreement -> "disputed"
 const MAX_BODY = 64 * 1024;
+const PI_API = process.env.PI_API_URL || 'https://api.minepi.com';
 
 const newId = (prefix) => `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 const newSecret = (prefix) => `${prefix}_${crypto.randomBytes(24).toString('base64url')}`;
@@ -34,6 +37,33 @@ function str(v, field, { max = 2000, required = true } = {}) {
   return v.trim();
 }
 
+function oneOf(v, field, allowed, fallback) {
+  if (v === undefined || v === null || v === '') return fallback;
+  if (!allowed.includes(v)) throw new HttpError(400, `"${field}" must be one of ${allowed.join(', ')}`);
+  return v;
+}
+
+function parseContext(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(-20).map((t, i) => ({
+    speaker: str(t?.speaker, `context[${i}].speaker`, { max: 40 }) === 'ai' ? 'ai' : 'human',
+    text: redact(str(t?.text, `context[${i}].text`, { max: 2000 })),
+  }));
+}
+
+function parseLabel(body) {
+  if (!isValidIntent(body.intent)) throw new HttpError(400, `"intent" must be one of ${INTENTS.join(', ')}`);
+  if (!isValidEmotion(body.emotion)) throw new HttpError(400, `"emotion" must be one of ${EMOTIONS.join(', ')}`);
+  const intensity = Number(body.intensity ?? 3);
+  if (!Number.isInteger(intensity) || intensity < 1 || intensity > 5) throw new HttpError(400, '"intensity" must be 1-5');
+  return {
+    intent: body.intent,
+    emotion: body.emotion,
+    intensity,
+    explanation: redact(str(body.explanation, 'explanation', { max: 600, required: false })),
+  };
+}
+
 // ----------------------------------------------------------------- views
 
 // What an AI agent sees about one of its questions.
@@ -41,6 +71,8 @@ function queryView(q) {
   return {
     id: q.id,
     status: q.status,
+    origin: q.origin,
+    platform: q.platform,
     utterance: q.utterance,
     question: q.question,
     difficulty: q.difficulty,
@@ -55,6 +87,8 @@ function queryView(q) {
 function taskView(q) {
   return {
     id: q.id,
+    origin: q.origin,
+    platform: q.platform,
     utterance: q.utterance,
     context: q.context,
     question: q.question,
@@ -67,11 +101,14 @@ function taskView(q) {
   };
 }
 
-// One resolved question as a training example.
+// One settled question as a training example.
 function learningView(q) {
   return {
     id: q.id,
+    origin: q.origin,
+    platform: q.platform,
     input: { context: q.context, utterance: q.utterance, locale: q.locale, modality: q.modality },
+    ai_misreading: q.agentGuess || null,
     label: {
       intent: q.consensus.intent,
       emotion: q.consensus.emotion,
@@ -86,30 +123,49 @@ function learningView(q) {
   };
 }
 
+const bearer = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+
 // ----------------------------------------------------------------- app
 
 export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join(__dirname, '..', 'data', 'db.json'), consensusOpts = DEFAULTS, fetchImpl = globalThis.fetch } = {}) {
   const db = new Store(dataFile);
 
   const repOf = (labelerId) => db.find('labelers', (l) => l.id === labelerId)?.reputation ?? 1;
+  const settled = () => db.filter('queries', (q) => q.status === 'resolved' || q.status === 'disputed');
   const resolvedQueries = () => db.filter('queries', (q) => q.status === 'resolved');
 
+  function agentForKey(token) {
+    return token ? db.find('agents', (a) => a.keyHash === hash(token)) : null;
+  }
+
   function authAgent(req) {
-    const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    const agent = token && db.find('agents', (a) => a.keyHash === hash(token));
+    const agent = agentForKey(bearer(req));
     if (!agent) throw new HttpError(401, 'Missing or invalid agent API key (Authorization: Bearer nk_...)');
     return agent;
   }
 
   function authLabeler(req) {
-    const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    const labeler = token && db.find('labelers', (l) => l.tokenHash === hash(token));
-    if (!labeler) throw new HttpError(401, 'Sign in as a labeler first');
+    const token = bearer(req);
+    const h = token && hash(token);
+    const labeler = h && db.find('labelers', (l) => l.tokenHashes?.includes(h));
+    if (!labeler) throw new HttpError(401, 'Sign in first');
     return labeler;
   }
 
+  function issueLabelerToken(labeler) {
+    const token = newSecret('lt');
+    db.update('labelers', labeler.id, { tokenHashes: [...(labeler.tokenHashes || []), hash(token)].slice(-5) });
+    return token;
+  }
+
+  function newLabeler(displayName, extra = {}) {
+    return db.insert('labelers', {
+      id: newId('lbl'), displayName, tokenHashes: [], reputation: 1, labeled: 0, agreed: 0, shared: 0, createdAt: now(), ...extra,
+    });
+  }
+
   async function notifyAgent(q) {
-    const agent = db.find('agents', (a) => a.id === q.agentId);
+    const agent = q.agentId && db.find('agents', (a) => a.id === q.agentId);
     if (!agent?.webhookUrl || !fetchImpl) return;
     try {
       await fetchImpl(agent.webhookUrl, {
@@ -121,6 +177,12 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
     } catch (err) {
       console.warn(`[nuance] webhook to ${agent.name} failed: ${err.message}`);
     }
+  }
+
+  function addLabel(q, labeler, label, extra = {}) {
+    db.insert('labels', { id: newId('lab'), queryId: q.id, labelerId: labeler.id, ...label, ...extra, createdAt: now() });
+    db.update('labelers', labeler.id, { labeled: labeler.labeled + 1 });
+    return settle(q);
   }
 
   function settle(q) {
@@ -147,33 +209,93 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
     return q;
   }
 
+  // Shared by the REST API, MCP and the "share a moment" form.
+  async function buildQuery(body, { agentId = null, origin, platform, submittedBy = null }) {
+    if (body.consent !== true) {
+      throw new HttpError(400, '"consent": true is required — confirm the person in the conversation agreed to have it reviewed by humans');
+    }
+    const q = {
+      id: newId('q'),
+      agentId,
+      submittedBy,
+      origin,
+      platform,
+      status: 'open',
+      utterance: redact(str(body.utterance, 'utterance')),
+      context: parseContext(body.context),
+      question: redact(str(body.question, 'question', { max: 500, required: false }) || 'What did the person really mean, and how did they feel?'),
+      agentGuess: redact(str(body.agentGuess, 'agentGuess', { max: 300, required: false })),
+      difficulty: oneOf(body.difficulty, 'difficulty', DIFFICULTY_TYPES, 'intent'),
+      modality: oneOf(body.modality, 'modality', MODALITIES, 'text'),
+      locale: str(body.locale, 'locale', { max: 20, required: false }) || 'en',
+      externalRef: str(body.externalRef, 'externalRef', { max: 200, required: false }),
+      labelCount: 0,
+      consensus: null,
+      createdAt: now(),
+    };
+    q.appAnswer = await analyze(q, resolvedQueries());
+    return db.insert('queries', q);
+  }
+
+  const service = {
+    async createQuery(agent, body) {
+      return queryView(await buildQuery(body, { agentId: agent.id, origin: 'agent', platform: agent.platform }));
+    },
+    getQuery(agent, id) {
+      const q = db.find('queries', (x) => x.id === id && x.agentId === agent.id);
+      if (!q) throw new HttpError(404, 'Query not found');
+      return queryView(q);
+    },
+    similar(utterance, limit = 5) {
+      const text = str(utterance, 'utterance');
+      return settled()
+        .map((q) => ({ q, score: similarity(text, q.utterance) }))
+        .filter((m) => m.score >= 0.3)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, Math.min(10, Math.max(1, Number(limit) || 5)))
+        .map(({ q, score }) => ({ similarity: +score.toFixed(2), ...learningView(q) }));
+    },
+    learnings(since, limit = 200) {
+      return settled()
+        .filter((q) => !since || q.resolvedAt > since)
+        .slice(-Math.min(1000, Math.max(1, Number(limit) || 200)))
+        .map(learningView);
+    },
+  };
+
   // ------------------------------------------------------------- routes
 
   const routes = [
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
 
-    ['GET', /^\/api\/taxonomy$/, () => ({ intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES })],
+    ['GET', /^\/api\/taxonomy$/, () => ({ intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES, platforms: PLATFORMS })],
+
+    ['GET', /^\/(openapi\.json|\.well-known\/openapi\.json)$/, (req) => openApiSpec(baseUrl(req))],
 
     ['GET', /^\/api\/stats$/, () => {
       const qs = db.data.queries;
       const count = (s) => qs.filter((q) => q.status === s).length;
+      const byPlatform = {};
+      for (const q of qs) byPlatform[q.platform] = (byPlatform[q.platform] || 0) + 1;
       const leaderboard = [...db.data.labelers]
         .sort((a, b) => b.reputation - a.reputation || b.labeled - a.labeled)
         .slice(0, 10)
-        .map((l) => ({ displayName: l.displayName, reputation: l.reputation, labeled: l.labeled }));
+        .map((l) => ({ displayName: l.displayName, reputation: l.reputation, labeled: l.labeled, viaPi: Boolean(l.piUid) }));
       return {
         agents: db.data.agents.length,
         labelers: db.data.labelers.length,
         questions: qs.length,
+        sharedByPeople: qs.filter((q) => q.origin === 'person').length,
         open: count('open'),
         resolved: count('resolved'),
         disputed: count('disputed'),
         labels: db.data.labels.length,
+        byPlatform,
         leaderboard,
       };
     }],
 
-    // ---- AI agents
+    // ---- AI agents (any platform)
     ['POST', /^\/api\/agents\/register$/, (req, body) => {
       const admin = process.env.NUANCE_ADMIN_TOKEN;
       if (admin && req.headers['x-admin-token'] !== admin) throw new HttpError(403, 'Agent registration requires the admin token');
@@ -183,48 +305,24 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       const agent = db.insert('agents', {
         id: newId('agt'),
         name: str(body.name, 'name', { max: 100 }),
+        platform: oneOf(body.platform, 'platform', PLATFORMS, 'custom'),
         description: str(body.description, 'description', { max: 500, required: false }),
         webhookUrl,
         keyHash: hash(apiKey),
         createdAt: now(),
       });
-      return { status: 201, body: { id: agent.id, name: agent.name, apiKey, note: 'Store this key now; it is not shown again.' } };
-    }],
-
-    ['POST', /^\/api\/v1\/queries$/, async (req, body) => {
-      const agent = authAgent(req);
-      if (body.consent !== true) {
-        throw new HttpError(400, '"consent": true is required — confirm the person in the conversation agreed to have it reviewed by humans');
-      }
-      const context = Array.isArray(body.context) ? body.context.slice(-20).map((t, i) => ({
-        speaker: str(t?.speaker, `context[${i}].speaker`, { max: 40 }) === 'ai' ? 'ai' : 'human',
-        text: redact(str(t?.text, `context[${i}].text`, { max: 2000 })),
-      })) : [];
-      const difficulty = body.difficulty ?? 'intent';
-      if (!DIFFICULTY_TYPES.includes(difficulty)) throw new HttpError(400, `"difficulty" must be one of ${DIFFICULTY_TYPES.join(', ')}`);
-      const modality = body.modality ?? 'text';
-      if (!MODALITIES.includes(modality)) throw new HttpError(400, `"modality" must be one of ${MODALITIES.join(', ')}`);
-
-      const q = {
-        id: newId('q'),
-        agentId: agent.id,
-        status: 'open',
-        utterance: redact(str(body.utterance, 'utterance')),
-        context,
-        question: redact(str(body.question, 'question', { max: 500, required: false }) || 'What did the person really mean, and how did they feel?'),
-        agentGuess: redact(str(body.agentGuess, 'agentGuess', { max: 300, required: false })),
-        difficulty,
-        modality,
-        locale: str(body.locale, 'locale', { max: 20, required: false }) || 'en',
-        externalRef: str(body.externalRef, 'externalRef', { max: 200, required: false }),
-        labelCount: 0,
-        consensus: null,
-        createdAt: now(),
+      const base = baseUrl(req);
+      return {
+        status: 201,
+        body: {
+          id: agent.id, name: agent.name, platform: agent.platform, apiKey,
+          note: 'Store this key now; it is not shown again.',
+          connect: { rest: `${base}/api/v1`, mcp: `${base}/mcp`, openapi: `${base}/openapi.json` },
+        },
       };
-      q.appAnswer = await analyze(q, resolvedQueries());
-      db.insert('queries', q);
-      return { status: 201, body: queryView(q) };
     }],
+
+    ['POST', /^\/api\/v1\/queries$/, async (req, body) => ({ status: 201, body: await service.createQuery(authAgent(req), body) })],
 
     ['GET', /^\/api\/v1\/queries$/, (req, _b, _m, url) => {
       const agent = authAgent(req);
@@ -232,19 +330,17 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       return { queries: db.filter('queries', (q) => q.agentId === agent.id && (!status || q.status === status)).map(queryView) };
     }],
 
-    ['GET', /^\/api\/v1\/queries\/([\w]+)$/, (req, _b, [, id]) => {
-      const agent = authAgent(req);
-      const q = db.find('queries', (x) => x.id === id && x.agentId === agent.id);
-      if (!q) throw new HttpError(404, 'Query not found');
-      return queryView(q);
+    ['GET', /^\/api\/v1\/queries\/([\w]+)$/, (req, _b, [, id]) => service.getQuery(authAgent(req), id)],
+
+    ['GET', /^\/api\/v1\/similar$/, (req, _b, _m, url) => {
+      authAgent(req);
+      return { matches: service.similar(url.searchParams.get('utterance'), url.searchParams.get('limit')) };
     }],
 
-    // Everything the community has resolved, as training examples. Any registered agent can learn from all of it.
+    // Everything people have settled, from every platform. Any connected agent can learn from all of it.
     ['GET', /^\/api\/v1\/learnings$/, (req, _b, _m, url) => {
       authAgent(req);
-      const since = url.searchParams.get('since');
-      const items = db.filter('queries', (q) => (q.status === 'resolved' || q.status === 'disputed') && (!since || q.resolvedAt > since));
-      return { learnings: items.map(learningView) };
+      return { learnings: service.learnings(url.searchParams.get('since'), url.searchParams.get('limit')) };
     }],
 
     ['GET', /^\/api\/v1\/dataset\.jsonl$/, (req) => {
@@ -253,24 +349,32 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       return { raw: lines + (lines ? '\n' : ''), type: 'application/x-ndjson' };
     }],
 
-    // ---- human labelers
+    // ---- people
     ['POST', /^\/api\/labelers$/, (_req, body) => {
-      const token = newSecret('lt');
-      const labeler = db.insert('labelers', {
-        id: newId('lbl'),
-        displayName: str(body.displayName, 'displayName', { max: 40 }),
-        tokenHash: hash(token),
-        reputation: 1,
-        labeled: 0,
-        agreed: 0,
-        createdAt: now(),
-      });
-      return { status: 201, body: { id: labeler.id, displayName: labeler.displayName, token } };
+      const labeler = newLabeler(str(body.displayName, 'displayName', { max: 40 }));
+      return { status: 201, body: { id: labeler.id, displayName: labeler.displayName, token: issueLabelerToken(labeler) } };
+    }],
+
+    // Sign in with Pi Network: the Pi Browser gives the page an access token; we confirm it with Pi's servers.
+    ['POST', /^\/api\/labelers\/pi$/, async (_req, body) => {
+      const accessToken = str(body.accessToken, 'accessToken', { max: 4000 });
+      let me;
+      try {
+        const res = await fetchImpl(`${PI_API}/v2/me`, { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`Pi said ${res.status}`);
+        me = await res.json();
+      } catch (err) {
+        throw new HttpError(401, `Could not verify your Pi sign-in (${err.message})`);
+      }
+      if (!me?.uid) throw new HttpError(401, 'Could not verify your Pi sign-in');
+      let labeler = db.find('labelers', (l) => l.piUid === me.uid);
+      if (!labeler) labeler = newLabeler(String(me.username || 'Pioneer').slice(0, 40), { piUid: me.uid });
+      return { status: 201, body: { id: labeler.id, displayName: labeler.displayName, token: issueLabelerToken(labeler), viaPi: true } };
     }],
 
     ['GET', /^\/api\/me$/, (req) => {
       const l = authLabeler(req);
-      return { id: l.id, displayName: l.displayName, reputation: l.reputation, labeled: l.labeled, agreed: l.agreed };
+      return { id: l.id, displayName: l.displayName, reputation: l.reputation, labeled: l.labeled, agreed: l.agreed, shared: l.shared || 0, viaPi: Boolean(l.piUid) };
     }],
 
     ['GET', /^\/api\/tasks\/next$/, (req) => {
@@ -288,34 +392,60 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
       if (!q) throw new HttpError(404, 'Question not found');
       if (q.status !== 'open') throw new HttpError(409, 'This question is already settled');
       if (db.find('labels', (x) => x.queryId === id && x.labelerId === l.id)) throw new HttpError(409, 'You already answered this one');
-      if (!isValidIntent(body.intent)) throw new HttpError(400, `"intent" must be one of ${INTENTS.join(', ')}`);
-      if (!isValidEmotion(body.emotion)) throw new HttpError(400, `"emotion" must be one of ${EMOTIONS.join(', ')}`);
-      const intensity = Number(body.intensity ?? 3);
-      if (!Number.isInteger(intensity) || intensity < 1 || intensity > 5) throw new HttpError(400, '"intensity" must be 1-5');
       const verdict = body.appAnswerVerdict;
       if (verdict && !['correct', 'partly', 'wrong'].includes(verdict)) throw new HttpError(400, '"appAnswerVerdict" must be correct, partly or wrong');
-
-      db.insert('labels', {
-        id: newId('lab'),
-        queryId: id,
-        labelerId: l.id,
-        intent: body.intent,
-        emotion: body.emotion,
-        intensity,
-        appAnswerVerdict: verdict,
-        explanation: redact(str(body.explanation, 'explanation', { max: 600, required: false })),
-        createdAt: now(),
-      });
-      db.update('labelers', l.id, { labeled: l.labeled + 1 });
-      settle(q);
+      addLabel(q, l, parseLabel(body), { appAnswerVerdict: verdict });
       return { status: 201, body: { status: q.status, consensus: q.consensus } };
+    }],
+
+    // A person shares a moment where an AI (any platform) misread them, and says what they really meant.
+    // Their own answer is the first vote; others confirm it before it becomes training data.
+    ['POST', /^\/api\/moments$/, async (req, body) => {
+      const l = authLabeler(req);
+      const label = parseLabel(body);
+      const q = await buildQuery(
+        { ...body, question: body.question || 'An AI misread this. What did the person really mean, and how did they feel?' },
+        { origin: 'person', platform: oneOf(body.platform, 'platform', PLATFORMS, 'other'), submittedBy: l.id },
+      );
+      addLabel(q, l, label, { isAuthor: true });
+      db.update('labelers', l.id, { shared: (l.shared || 0) + 1 });
+      return { status: 201, body: { id: q.id, status: q.status, appAnswer: q.appAnswer } };
     }],
   ];
 
+  async function handleMcp(req, res, url) {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { allow: 'POST' });
+      return res.end();
+    }
+    // Header is preferred; ?key= exists for connector UIs that cannot set headers.
+    const agent = agentForKey(bearer(req) || url.searchParams.get('key'));
+    if (!agent) {
+      res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer realm="nuance-hub"' });
+      return res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Agent API key required' } }));
+    }
+    let payload;
+    try { payload = await readJson(req); }
+    catch { return send(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
+    const batch = Array.isArray(payload);
+    const replies = (await Promise.all((batch ? payload : [payload]).map((m) => handleMcpMessage(m, agent, service)))).filter(Boolean);
+    if (!replies.length) { res.writeHead(202); return res.end(); }
+    send(res, 200, batch ? replies : replies[0]);
+  }
+
   async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'GET, POST, OPTIONS',
+        'access-control-allow-headers': 'authorization, content-type, mcp-protocol-version, mcp-session-id, x-admin-token',
+      });
+      return res.end();
+    }
     try {
-      if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
+      if (url.pathname === '/mcp') return await handleMcp(req, res, url);
+      if (!url.pathname.startsWith('/api/') && !url.pathname.endsWith('openapi.json')) return serveStatic(url.pathname, res);
       const route = routes.find(([m, re]) => m === req.method && re.test(url.pathname));
       if (!route) throw new HttpError(404, 'Not found');
       const body = req.method === 'POST' ? await readJson(req) : {};
@@ -324,8 +454,8 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
         res.writeHead(200, { 'content-type': out.type });
         return res.end(out.raw);
       }
-      const status = out?.status && out.body ? out.status : 200;
-      send(res, status, out?.status && out.body ? out.body : out);
+      const wrapped = out?.status && out.body;
+      send(res, wrapped ? out.status : 200, wrapped ? out.body : out);
     } catch (err) {
       if (!(err instanceof HttpError)) console.error(err);
       send(res, err.status || 500, { error: err instanceof HttpError ? err.message : 'Internal error' });
@@ -335,6 +465,12 @@ export function createApp({ dataFile = process.env.NUANCE_DATA_FILE ?? path.join
   const server = http.createServer(handle);
   server.db = db;
   return server;
+}
+
+function baseUrl(req) {
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
+  const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0];
+  return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`;
 }
 
 function send(res, status, body) {
@@ -379,7 +515,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const app = createApp();
   app.listen(port, () => {
     console.log(`Nuance Hub running at http://localhost:${port}`);
-    console.log(process.env.ANTHROPIC_API_KEY ? 'Claude analysis: on' : 'Claude analysis: off (set ANTHROPIC_API_KEY to enable)');
+    console.log(`  MCP endpoint:  http://localhost:${port}/mcp`);
+    console.log(`  OpenAPI spec:  http://localhost:${port}/openapi.json`);
+    console.log(process.env.ANTHROPIC_API_KEY ? '  Claude analysis: on' : '  Claude analysis: off (set ANTHROPIC_API_KEY to enable)');
   });
   const shutdown = () => { app.db.flush(); process.exit(0); };
   process.on('SIGINT', shutdown);

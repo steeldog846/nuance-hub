@@ -12,12 +12,13 @@
       <span class="logo" aria-hidden="true">◐</span>
       <div>
         <h1>Nuance Hub</h1>
-        <p class="tag">Help AI understand what people really mean.</p>
+        <p class="tag">Teach every AI what people really mean.</p>
       </div>
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab active" data-view="label" role="tab">Answer questions</button>
-      <button class="tab" data-view="agents" role="tab">For AI developers</button>
+      <button class="tab" data-view="share" role="tab">Share a moment</button>
+      <button class="tab" data-view="agents" role="tab">Connect an AI</button>
       <button class="tab" data-view="community" role="tab">Community</button>
     </nav>
   </header>
@@ -27,11 +28,14 @@
     <section id="view-label" class="view">
       <div id="signin" class="card narrow" hidden>
         <h2>Join as a human guide</h2>
-        <p class="muted">AI assistants send us moments they couldn't read — sarcasm, a joke, hidden frustration. You tell them what was really going on.</p>
+        <p class="muted">Claude, ChatGPT, Gemini, Copilot, Pi apps and other assistants send us moments they couldn't read: sarcasm, a joke, hidden frustration. You tell them what was really going on, and every connected AI learns from it.</p>
+        <button class="primary pi-btn" id="pi-signin" type="button" hidden>Sign in with Pi</button>
+        <p class="small muted" id="pi-or" hidden>or</p>
         <form id="signin-form" class="row">
           <input id="displayName" placeholder="Pick a display name" maxlength="40" required autocomplete="nickname">
           <button class="primary" type="submit">Start</button>
         </form>
+        <p class="error" id="signin-error" hidden></p>
       </div>
 
       <div id="me-bar" class="me-bar" hidden>
@@ -52,6 +56,7 @@
           <span class="badge" id="t-difficulty"></span>
           <span class="muted small" id="t-meta"></span>
         </div>
+        <p class="small origin" id="t-origin"></p>
 
         <div class="convo" id="t-context"></div>
         <blockquote class="utterance" id="t-utterance"></blockquote>
@@ -109,11 +114,53 @@
       </div>
     </section>
 
+    <!-- ============ SHARE ============ -->
+    <section id="view-share" class="view" hidden>
+      <form id="share" class="card">
+        <h2>Share a moment an AI got wrong</h2>
+        <p class="muted">Did an assistant take your sarcasm literally, miss that you were upset, or not get your joke? Share it. Other people confirm what you meant, and then every connected AI can learn from it.</p>
+        <p class="small" id="share-signin-note" hidden>Sign in on the “Answer questions” tab first.</p>
+
+        <label class="stack">Which AI was it?
+          <select id="s-platform"></select>
+        </label>
+        <label class="stack"><span>What came before (optional, one line per turn, start with <code>ai:</code> or <code>human:</code>)</span>
+          <textarea id="s-context" rows="3" placeholder="human: My flight got cancelled for the third time.&#10;ai: I'm sorry to hear that! Would you like to book another flight?"></textarea>
+        </label>
+        <label class="stack">What you said
+          <input id="s-utterance" required maxlength="2000" placeholder="Love this airline so much.">
+        </label>
+        <label class="stack">How the AI got it wrong (optional)
+          <input id="s-misread" maxlength="300" placeholder="It recommended more flights with the same airline.">
+        </label>
+        <fieldset>
+          <legend>What you really meant</legend>
+          <div class="chips" id="s-intent-chips"></div>
+        </fieldset>
+        <fieldset>
+          <legend>How you felt</legend>
+          <div class="chips" id="s-emotion-chips"></div>
+        </fieldset>
+        <fieldset>
+          <legend>How strongly? <span class="muted" id="s-intensity-out">3</span>/5</legend>
+          <input type="range" id="s-intensity" min="1" max="5" value="3">
+        </fieldset>
+        <label class="stack">Explain it for the AI
+          <textarea id="s-explanation" rows="2" maxlength="600" placeholder="Third cancellation. Saying I love them was pure sarcasm. I was furious."></textarea>
+        </label>
+        <label class="check small"><input type="checkbox" id="s-consent"><span>This is my own conversation (or I have permission), and I've removed names.</span></label>
+        <p class="error" id="share-error" hidden></p>
+        <p class="ok" id="share-ok" hidden></p>
+        <div class="row end"><button class="primary" type="submit">Share</button></div>
+      </form>
+    </section>
+
     <!-- ============ AGENTS ============ -->
     <section id="view-agents" class="view" hidden>
       <div class="card">
-        <h2>Connect your AI agent</h2>
-        <p>Your agent sends us a moment it didn't understand. We answer right away with our best guess, then people review it. When enough of them agree, your agent gets the final answer, and the example joins a shared dataset every connected agent can learn from.</p>
+        <h2>Connect any AI</h2>
+        <p>Nuance Hub isn't tied to one company. Any assistant or AI app can connect through open standards: <strong>MCP</strong> (Claude, ChatGPT, Copilot, Cursor and most agent tools), <strong>OpenAPI</strong> (ChatGPT custom GPTs, Gemini, Copilot Studio, LangChain) or plain <strong>REST</strong> (Pi Network apps and anything else).</p>
+        <p>Your AI sends us a moment it didn't understand. We answer right away with our best guess, then people review it. When enough of them agree, your agent gets the final answer, and the example joins a shared dataset every connected agent can learn from.</p>
         <ol class="flow">
           <li><strong>Register</strong> once and get an API key.</li>
           <li><strong>Ask</strong>: <code>POST /api/v1/queries</code> with the message, the conversation around it and your question.</li>
@@ -124,14 +171,25 @@
       </div>
 
       <div class="card">
-        <h3>Try it</h3>
+        <h3>1. Register your AI</h3>
         <div class="row">
-          <input id="agent-name" placeholder="Agent name, e.g. support-bot" maxlength="100">
-          <button class="ghost" id="register-agent">Register agent</button>
+          <input id="agent-name" placeholder="Name, e.g. support-bot" maxlength="100">
+          <select id="agent-platform" aria-label="Platform"></select>
+          <button class="ghost" id="register-agent">Register</button>
         </div>
         <p class="small muted" id="agent-key-out"></p>
+      </div>
 
-        <label class="stack">Conversation so far (one line per turn, start with <code>ai:</code> or <code>human:</code>)
+      <div class="card">
+        <h3>2. Connect it</h3>
+        <div class="chips" id="guide-tabs" role="tablist"></div>
+        <div id="guide" class="guide"></div>
+      </div>
+
+      <div class="card">
+        <h3>3. Try a question</h3>
+
+        <label class="stack"><span>Conversation so far (one line per turn, start with <code>ai:</code> or <code>human:</code>)</span>
           <textarea id="demo-context" rows="3">ai: Your laptop update finished installing.
 human: It restarted in the middle of my presentation.</textarea>
         </label>
@@ -141,7 +199,7 @@ human: It restarted in the middle of my presentation.</textarea>
         <label class="stack">The AI's question
           <input id="demo-question" value="Is the user happy with the timing or being sarcastic?">
         </label>
-        <label class="row small"><input type="checkbox" id="demo-consent" checked> The person agreed to have this reviewed</label>
+        <label class="check small"><input type="checkbox" id="demo-consent" checked><span>The person agreed to have this reviewed</span></label>
         <div class="row end"><button class="primary" id="send-demo">Send question</button></div>
         <pre class="code" id="demo-out" hidden></pre>
       </div>
@@ -170,6 +228,10 @@ GET  /api/v1/dataset.jsonl         → training file (one example per line)</pre
     <!-- ============ COMMUNITY ============ -->
     <section id="view-community" class="view" hidden>
       <div class="stats" id="stats"></div>
+      <div class="card">
+        <h3>Questions by AI platform</h3>
+        <div id="by-platform"></div>
+      </div>
       <div class="card">
         <h3>Most trusted guides</h3>
         <ol class="leaderboard" id="leaderboard"></ol>

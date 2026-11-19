@@ -72,8 +72,11 @@ main { max-width: 760px; margin: 0 auto; padding: 1.5rem 16px 3rem; }
 
 .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; margin-top: .5rem; }
+.check { display: flex; gap: .5rem; align-items: flex-start; margin: .5rem 0; }
+.check input { margin-top: .2rem; flex: none; }
 .stack { display: grid; gap: .3rem; margin: .75rem 0; font-size: .9rem; color: var(--muted); }
 
+select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: .55rem .6rem; }
 input[type=text], input:not([type]), textarea {
   font: inherit; color: var(--ink); background: var(--bg);
   border: 1px solid var(--line); border-radius: 10px; padding: .6rem .75rem; width: 100%;
@@ -126,6 +129,13 @@ legend { font-weight: 600; margin-bottom: .4rem; padding: 0; }
 input[type=range] { width: 100%; accent-color: var(--accent); }
 
 .error { color: var(--bad); }
+.ok { color: var(--ok); }
+.origin { margin: -.25rem 0 .75rem; color: var(--muted); }
+.pi-btn { width: 100%; margin-bottom: .5rem; }
+#pi-or { text-align: center; margin: .25rem 0 .5rem; }
+.guide { margin-top: .75rem; }
+.guide ol { padding-left: 1.2rem; }
+.guide li { margin-bottom: .35rem; }
 
 .bar { display: grid; grid-template-columns: 9rem 1fr 3rem; gap: .5rem; align-items: center; font-size: .9rem; margin: .3rem 0; }
 .bar-track { background: var(--bg); border-radius: 999px; height: .6rem; overflow: hidden; }

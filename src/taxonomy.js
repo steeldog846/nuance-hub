@@ -28,3 +28,10 @@ export const MODALITIES = ['text', 'voice_transcript', 'video_transcript', 'chat
 
 export function isValidIntent(v) { return INTENTS.includes(v); }
 export function isValidEmotion(v) { return EMOTIONS.includes(v); }
+
+// Where a question came from. Any AI can connect; this only groups the stats
+// and tells labelers which kind of assistant got confused.
+export const PLATFORMS = [
+  'claude', 'chatgpt', 'gemini', 'copilot', 'meta_ai', 'grok', 'mistral',
+  'deepseek', 'perplexity', 'pi_network', 'open_source', 'custom', 'other',
+];
