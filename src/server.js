@@ -491,7 +491,13 @@ export function createApp({
   // ------------------------------------------------------------- routes
 
   const routes = [
-    ['GET', /^\/api\/health$/, () => ({ ok: true, claude: claudeStatus(), storage: db.kind })],
+    // ?check=claude also reads one sample answer with Claude (at most once per 10 minutes per server).
+    ['GET', /^\/api\/health$/, async (_req, _b, _m, url) => ({
+      ok: true,
+      claude: claudeStatus(),
+      storage: db.kind,
+      ...(url.searchParams.get('check') === 'claude' ? { claudeCheck: await claudeSelfCheck() } : {}),
+    })],
 
     ['GET', /^\/api\/taxonomy$/, () => ({
       intents: INTENTS, emotions: EMOTIONS, difficulties: DIFFICULTY_TYPES, modalities: MODALITIES, platforms: PLATFORMS,
@@ -726,6 +732,26 @@ let shared = null;
 export function requestHandler(req, res) {
   shared ??= createApp({ dataFile: process.env.NUANCE_DATA_FILE ?? null });
   return shared.handle(req, res);
+}
+
+let lastSelfCheck = null;
+async function claudeSelfCheck() {
+  if (lastSelfCheck && Date.now() - lastSelfCheck.at < 10 * 60_000) return { ...lastSelfCheck, cached: true };
+  const started = Date.now();
+  const sample = 'gussa nahi tha, bas mazak kar raha tha 😂';
+  const read = await readOwnWords(sample, { kind: 'meaning' });
+  lastSelfCheck = {
+    at: Date.now(),
+    sample,
+    by: read.source,
+    intents: read.intents,
+    emotions: read.emotions,
+    english: read.english || null,
+    gist: read.gist || null,
+    ms: Date.now() - started,
+    error: read.source === 'claude' ? null : claudeStatus().lastError,
+  };
+  return lastSelfCheck;
 }
 
 // Is the AI asking less as it learns? Compare the oldest and newest checks.
