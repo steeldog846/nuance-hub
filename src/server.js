@@ -11,6 +11,7 @@ import { computeConsensus, updatedReputation, intentsOf, DEFAULTS } from './cons
 import { analyzeTyping, STYLES } from './style.js';
 import { readOwnWords } from './interpret.js';
 import { claudeStatus } from './claude.js';
+import { Limiter, clientIp } from './guard.js';
 import { handleMcpMessage } from './mcp.js';
 import { buildQuickCheck } from './learning.js';
 import { openApiSpec } from './openapi.js';
@@ -232,10 +233,19 @@ export function createApp({
   databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || null,
   consensusOpts = DEFAULTS,
   fetchImpl = globalThis.fetch,
+  limits = process.env.NUANCE_LIMITS !== 'off',
+  adminToken = process.env.NUANCE_ADMIN_TOKEN || null,
+  googleClientId = process.env.GOOGLE_CLIENT_ID || null,
 } = {}) {
   const db = new Store({ file: dataFile, databaseUrl });
+  const limiter = new Limiter({ store: db, enabled: Boolean(limits), ...(typeof limits === 'object' ? { limits } : {}) });
 
-  const repOf = (labelerId) => db.find('labelers', (l) => l.id === labelerId)?.reputation ?? 1;
+  // Guests (name only) count half until they sign in with Pi or Google, or an admin trusts them.
+  const verified = (l) => Boolean(l?.verifiedBy || l?.trusted);
+  const repOf = (labelerId) => {
+    const l = db.find('labelers', (x) => x.id === labelerId);
+    return (l?.reputation ?? 1) * (verified(l) ? 1 : 0.5);
+  };
   const settled = () => db.filter('queries', (q) => q.status === 'resolved' || q.status === 'disputed');
   const resolvedQueries = () => db.filter('queries', (q) => q.status === 'resolved');
   const learnedChecks = () => db.filter('checks', (c) => c.choice || (c.reaction === 'helpful' && c.suggested));
@@ -244,10 +254,23 @@ export function createApp({
     return token ? db.find('agents', (a) => a.keyHash === hash(token)) : null;
   }
 
-  function authAgent(req) {
-    const agent = agentForKey(bearer(req));
+  function checkAgent(agent) {
     if (!agent) throw new HttpError(401, 'Missing or invalid agent API key (Authorization: Bearer nk_...)');
+    if (agent.status === 'blocked') throw new HttpError(403, 'This AI agent has been blocked by the Nuance Hub admin');
     return agent;
+  }
+  const authAgent = (req) => checkAgent(agentForKey(bearer(req)));
+
+  // Agents that write (ask questions, start quick checks) are limited per minute and per day.
+  // New agents are on a trial allowance until an admin approves them.
+  async function chargeAgent(agent) {
+    await limiter.hit('agentBurst', agent.id, 'Too many requests from this AI agent; please slow down');
+    const approved = agent.status === 'approved';
+    await limiter.hit(
+      approved ? 'agentDailyApproved' : 'agentDailyTrial',
+      agent.id,
+      approved ? 'Daily limit reached for this AI agent' : 'Daily trial limit reached. Ask the Nuance Hub admin to approve this AI agent for more.',
+    );
   }
 
   function authLabeler(req) {
@@ -255,7 +278,20 @@ export function createApp({
     const h = token && hash(token);
     const labeler = h && db.find('labelers', (l) => l.tokenHashes?.includes(h));
     if (!labeler) throw new HttpError(401, 'Sign in first');
+    if (labeler.blocked) throw new HttpError(403, 'This account has been blocked');
     return labeler;
+  }
+
+  // Bots fill in every field; people never see this one.
+  function honeypot(body) {
+    if (body.website) throw new HttpError(400, 'Something went wrong, please try again');
+  }
+
+  function adminOnly(req) {
+    if (!adminToken) throw new HttpError(403, 'Admin is off. Set NUANCE_ADMIN_TOKEN on the server to turn it on.');
+    const given = Buffer.from(String(req.headers['x-admin-token'] || ''));
+    const want = Buffer.from(adminToken);
+    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) throw new HttpError(403, 'Wrong admin password');
   }
 
   function issueLabelerToken(labeler) {
@@ -532,9 +568,10 @@ export function createApp({
     }],
 
     // ---- AI agents (any platform)
-    ['POST', /^\/api\/agents\/register$/, (req, body) => {
-      const admin = process.env.NUANCE_ADMIN_TOKEN;
-      if (admin && req.headers['x-admin-token'] !== admin) throw new HttpError(403, 'Agent registration requires the admin token');
+    ['POST', /^\/api\/agents\/register$/, async (req, body) => {
+      if (process.env.NUANCE_REGISTRATION === 'closed') adminOnly(req);
+      honeypot(body);
+      await limiter.hit('registerAgent', clientIp(req), 'Too many AI agents registered from this address; try again later');
       const apiKey = newSecret('nk');
       const webhookUrl = str(body.webhookUrl, 'webhookUrl', { max: 500, required: false });
       if (webhookUrl && !/^https?:\/\//.test(webhookUrl)) throw new HttpError(400, '"webhookUrl" must be an http(s) URL');
@@ -545,20 +582,25 @@ export function createApp({
         description: str(body.description, 'description', { max: 500, required: false }),
         webhookUrl,
         keyHash: hash(apiKey),
+        status: 'trial',
         createdAt: now(),
       });
       const base = baseUrl(req);
       return {
         status: 201,
         body: {
-          id: agent.id, name: agent.name, platform: agent.platform, apiKey,
-          note: 'Store this key now; it is not shown again.',
+          id: agent.id, name: agent.name, platform: agent.platform, apiKey, status: agent.status,
+          note: 'Store this key now; it is not shown again. New agents start on a trial allowance (100 requests a day) until approved.',
           connect: { rest: `${base}/api/v1`, mcp: `${base}/mcp`, openapi: `${base}/openapi.json` },
         },
       };
     }],
 
-    ['POST', /^\/api\/v1\/queries$/, async (req, body) => ({ status: 201, body: await service.createQuery(authAgent(req), body) })],
+    ['POST', /^\/api\/v1\/queries$/, async (req, body) => {
+      const agent = authAgent(req);
+      await chargeAgent(agent);
+      return { status: 201, body: await service.createQuery(agent, body) };
+    }],
 
     ['GET', /^\/api\/v1\/queries$/, (req, _b, _m, url) => {
       const agent = authAgent(req);
@@ -586,18 +628,30 @@ export function createApp({
     }],
 
     // ---- quick checks (agent side)
-    ['POST', /^\/api\/v1\/checks$/, async (req, body) => ({ status: 201, body: await service.createCheck(authAgent(req), body, baseUrl(req)) })],
+    ['POST', /^\/api\/v1\/checks$/, async (req, body) => {
+      const agent = authAgent(req);
+      await chargeAgent(agent);
+      return { status: 201, body: await service.createCheck(agent, body, baseUrl(req)) };
+    }],
     ['GET', /^\/api\/v1\/checks\/(chk_\w+)$/, (req, _b, [, id]) => checkView(service.getCheck(authAgent(req), id), baseUrl(req))],
     ['POST', /^\/api\/v1\/checks\/(chk_\w+)\/answer$/, async (req, body, [, id]) => service.answerCheck(service.getCheck(authAgent(req), id), body)],
     ['POST', /^\/api\/v1\/checks\/(chk_\w+)\/reaction$/, (req, body, [, id]) => service.reactToCheck(service.getCheck(authAgent(req), id), body)],
 
     // ---- quick checks (person side, via the hosted tap page; the long random id is the permission)
     ['GET', /^\/api\/checks\/(chk_\w+)$/, (_req, _b, [, id]) => publicCheckView(service.getCheck(null, id))],
-    ['POST', /^\/api\/checks\/(chk_\w+)\/answer$/, async (_req, body, [, id]) => service.answerCheck(service.getCheck(null, id), body)],
-    ['POST', /^\/api\/checks\/(chk_\w+)\/reaction$/, (_req, body, [, id]) => service.reactToCheck(service.getCheck(null, id), body)],
+    ['POST', /^\/api\/checks\/(chk_\w+)\/answer$/, async (req, body, [, id]) => {
+      await limiter.hit('publicTap', clientIp(req));
+      return service.answerCheck(service.getCheck(null, id), body);
+    }],
+    ['POST', /^\/api\/checks\/(chk_\w+)\/reaction$/, async (req, body, [, id]) => {
+      await limiter.hit('publicTap', clientIp(req));
+      return service.reactToCheck(service.getCheck(null, id), body);
+    }],
 
     // ---- people
-    ['POST', /^\/api\/labelers$/, (_req, body) => {
+    ['POST', /^\/api\/labelers$/, async (req, body) => {
+      honeypot(body);
+      await limiter.hit('createGuide', clientIp(req), 'Too many sign-ups from this address; try again later');
       const labeler = newLabeler(str(body.displayName, 'displayName', { max: 40 }));
       return { status: 201, body: { id: labeler.id, displayName: labeler.displayName, token: issueLabelerToken(labeler) } };
     }],
@@ -615,13 +669,74 @@ export function createApp({
       }
       if (!me?.uid) throw new HttpError(401, 'Could not verify your Pi sign-in');
       let labeler = db.find('labelers', (l) => l.piUid === me.uid);
-      if (!labeler) labeler = newLabeler(String(me.username || 'Pioneer').slice(0, 40), { piUid: me.uid });
+      if (!labeler) labeler = newLabeler(String(me.username || 'Pioneer').slice(0, 40), { piUid: me.uid, verifiedBy: 'pi' });
+      if (labeler.blocked) throw new HttpError(403, 'This account has been blocked');
       return { status: 201, body: { id: labeler.id, displayName: labeler.displayName, token: issueLabelerToken(labeler), viaPi: true } };
     }],
 
+    // Sign in with Google: the page gets an ID token from Google; Google confirms it is genuine and meant for this app.
+    ['POST', /^\/api\/labelers\/google$/, async (req, body) => {
+      if (!googleClientId) throw new HttpError(404, 'Google sign-in is not set up on this server');
+      await limiter.hit('createGuide', clientIp(req), 'Too many sign-ins from this address; try again later');
+      const credential = str(body.credential, 'credential', { max: 5000 });
+      let info;
+      try {
+        const res = await fetchImpl(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`Google said ${res.status}`);
+        info = await res.json();
+      } catch (err) {
+        throw new HttpError(401, `Could not verify your Google sign-in (${err.message})`);
+      }
+      const goodIssuer = ['accounts.google.com', 'https://accounts.google.com'].includes(info.iss);
+      if (info.aud !== googleClientId || !goodIssuer || !info.sub || String(info.email_verified) !== 'true') {
+        throw new HttpError(401, 'Could not verify your Google sign-in');
+      }
+      // Only Google's account id is kept, not the email address.
+      let labeler = db.find('labelers', (l) => l.googleSub === info.sub);
+      if (!labeler) labeler = newLabeler(String(info.given_name || info.name || 'Guide').slice(0, 40), { googleSub: info.sub, verifiedBy: 'google' });
+      if (labeler.blocked) throw new HttpError(403, 'This account has been blocked');
+      return { status: 201, body: { id: labeler.id, displayName: labeler.displayName, token: issueLabelerToken(labeler), verifiedBy: 'google' } };
+    }],
+
+    ['GET', /^\/api\/config$/, () => ({ googleClientId, registration: process.env.NUANCE_REGISTRATION === 'closed' ? 'closed' : 'open' })],
+
     ['GET', /^\/api\/me$/, (req) => {
       const l = authLabeler(req);
-      return { id: l.id, displayName: l.displayName, reputation: l.reputation, labeled: l.labeled, agreed: l.agreed, shared: l.shared || 0, viaPi: Boolean(l.piUid) };
+      return {
+        id: l.id, displayName: l.displayName, reputation: l.reputation, labeled: l.labeled, agreed: l.agreed, shared: l.shared || 0,
+        viaPi: Boolean(l.piUid), verifiedBy: l.verifiedBy || null, verified: verified(l),
+      };
+    }],
+
+    // ---- admin (needs the x-admin-token header to match NUANCE_ADMIN_TOKEN)
+    ['GET', /^\/api\/admin\/overview$/, (req) => {
+      adminOnly(req);
+      const counts = (pred) => db.filter('checks', pred).length;
+      return {
+        agents: [...db.data.agents].reverse().map((a) => ({
+          id: a.id, name: a.name, platform: a.platform, status: a.status || 'trial', createdAt: a.createdAt,
+          checks: counts((c) => c.agentId === a.id), questions: db.filter('queries', (q) => q.agentId === a.id).length,
+        })),
+        guides: [...db.data.labelers].reverse().map((l) => ({
+          id: l.id, displayName: l.displayName, verifiedBy: l.verifiedBy || null, trusted: Boolean(l.trusted), blocked: Boolean(l.blocked),
+          labeled: l.labeled, shared: l.shared || 0, reputation: l.reputation, createdAt: l.createdAt,
+        })),
+      };
+    }],
+    ['POST', /^\/api\/admin\/agents\/(agt_\w+)$/, (req, body, [, id]) => {
+      adminOnly(req);
+      const status = oneOf(body.status, 'status', ['trial', 'approved', 'blocked']);
+      if (!status || !db.update('agents', id, { status })) throw new HttpError(404, 'Agent not found');
+      return { id, status };
+    }],
+    ['POST', /^\/api\/admin\/guides\/(lbl_\w+)$/, (req, body, [, id]) => {
+      adminOnly(req);
+      const patch = {};
+      if (typeof body.blocked === 'boolean') patch.blocked = body.blocked;
+      if (typeof body.trusted === 'boolean') patch.trusted = body.trusted;
+      if (body.blocked === true) patch.tokenHashes = []; // signs them out everywhere
+      if (!Object.keys(patch).length || !db.update('labelers', id, patch)) throw new HttpError(404, 'Guide not found');
+      return { id, ...patch, tokenHashes: undefined };
     }],
 
     ['GET', /^\/api\/tasks\/next$/, (req) => {
@@ -639,6 +754,8 @@ export function createApp({
       if (!q) throw new HttpError(404, 'Question not found');
       if (q.status !== 'open') throw new HttpError(409, 'This question is already settled');
       if (db.find('labels', (x) => x.queryId === id && x.labelerId === l.id)) throw new HttpError(409, 'You already answered this one');
+      await limiter.hit(verified(l) ? 'labelVerified' : 'labelGuest', l.id,
+        verified(l) ? 'Daily answer limit reached, thank you! Come back tomorrow.' : 'Guest daily limit reached. Sign in with Google or Pi to answer more.');
       const verdict = body.appAnswerVerdict;
       if (verdict && !['correct', 'partly', 'wrong'].includes(verdict)) throw new HttpError(400, '"appAnswerVerdict" must be correct, partly or wrong');
       addLabel(q, l, await parseLabel(body, { utterance: q.utterance, context: q.context }), { appAnswerVerdict: verdict });
@@ -649,6 +766,8 @@ export function createApp({
     // Their own answer is the first vote; others confirm it before it becomes training data.
     ['POST', /^\/api\/moments$/, async (req, body) => {
       const l = authLabeler(req);
+      await limiter.hit(verified(l) ? 'momentVerified' : 'momentGuest', l.id,
+        verified(l) ? 'Daily sharing limit reached, thank you!' : 'Guests can share 3 moments a day. Sign in with Google or Pi to share more.');
       const label = await parseLabel(body, { utterance: body.utterance, context: body.context });
       const q = await buildQuery(
         { ...body, question: body.question || 'An AI misread this. What did the person really mean, and how did they feel?' },
@@ -667,6 +786,7 @@ export function createApp({
     }
     // Header is preferred; ?key= exists for connector UIs that cannot set headers.
     const agent = agentForKey(bearer(req) || url.searchParams.get('key'));
+    if (agent?.status === 'blocked') return send(res, 403, { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'This AI agent has been blocked' } });
     if (!agent) {
       res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer realm="nuance-hub"' });
       return res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Agent API key required' } }));
@@ -675,7 +795,11 @@ export function createApp({
     try { payload = await readJson(req); }
     catch { return send(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
     const batch = Array.isArray(payload);
-    const svc = { ...service, createCheck: (ag, body) => service.createCheck(ag, body, baseUrl(req)) };
+    const svc = {
+      ...service,
+      createCheck: async (ag, body) => { await chargeAgent(ag); return service.createCheck(ag, body, baseUrl(req)); },
+      createQuery: async (ag, body) => { await chargeAgent(ag); return service.createQuery(ag, body); },
+    };
     const replies = (await Promise.all((batch ? payload : [payload]).map((m) => handleMcpMessage(m, agent, svc)))).filter(Boolean);
     await db.commit();
     if (!replies.length) { res.writeHead(202); return res.end(); }
@@ -715,9 +839,11 @@ export function createApp({
       const wrapped = out?.status && out.body;
       send(res, wrapped ? out.status : 200, wrapped ? out.body : out);
     } catch (err) {
-      if (!(err instanceof HttpError)) console.error(err);
+      const known = err instanceof HttpError || err.status === 429;
+      if (!known) console.error(err);
       await db.commit().catch((e) => console.error('[nuance] save failed:', e.message));
-      send(res, err.status || 500, { error: err instanceof HttpError ? err.message : 'Internal error' });
+      if (err.status === 429 && err.retryAfter) res.setHeader('retry-after', String(err.retryAfter));
+      send(res, err.status || 500, { error: known ? err.message : 'Internal error' });
     }
   }
 

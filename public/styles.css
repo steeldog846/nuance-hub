@@ -199,3 +199,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .own-words { margin-top: .5rem; font-size: .92rem; }
 .bubble .own-words { width: 100%; background: var(--surface); }
 .tap-card .own-words { margin: .25rem 0 .75rem; }
+
+/* hidden bot trap: people never see or fill it */
+.trap { position: absolute !important; left: -10000px !important; width: 1px !important; height: 1px !important; opacity: 0; }
+.google-signin { display: flex; justify-content: center; margin-bottom: .5rem; min-height: 44px; }
+.guest-pill { background: var(--accent-soft); }

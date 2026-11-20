@@ -95,6 +95,7 @@ async function refreshMe() {
   $('me-name').textContent = me.displayName;
   $('me-rep').textContent = me.reputation.toFixed(2);
   $('me-count').textContent = me.labeled;
+  $('me-guest').hidden = me.verified;
 }
 
 async function loadTask() {
@@ -153,9 +154,42 @@ function signedIn(token) {
 
 $('signin-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const { token } = await api('/api/labelers', { method: 'POST', body: { displayName: $('displayName').value } });
-  signedIn(token);
+  $('signin-error').hidden = true;
+  try {
+    const { token } = await api('/api/labelers', { method: 'POST', body: { displayName: $('displayName').value, website: $('signin-website').value } });
+    signedIn(token);
+  } catch (ex) {
+    $('signin-error').textContent = ex.message;
+    $('signin-error').hidden = false;
+  }
 });
+
+// Sign in with Google, offered when the server has a Google client id.
+api('/api/config').then((cfg) => {
+  if (!cfg.googleClientId) return;
+  const gis = document.createElement('script');
+  gis.src = 'https://accounts.google.com/gsi/client';
+  gis.async = true;
+  gis.onload = () => {
+    window.google.accounts.id.initialize({
+      client_id: cfg.googleClientId,
+      callback: async ({ credential }) => {
+        $('signin-error').hidden = true;
+        try {
+          const { token } = await api('/api/labelers/google', { method: 'POST', body: { credential } });
+          signedIn(token);
+        } catch (ex) {
+          $('signin-error').textContent = ex.message;
+          $('signin-error').hidden = false;
+        }
+      },
+    });
+    window.google.accounts.id.renderButton($('google-signin'), { theme: 'outline', size: 'large', text: 'signin_with', width: 280 });
+    $('google-signin').hidden = false;
+    $('pi-or').hidden = false;
+  };
+  document.head.appendChild(gis);
+}).catch(() => {});
 
 // Pi Network: only offered inside the Pi Browser, where the Pi SDK can authenticate.
 const inPiBrowser = /PiBrowser/i.test(navigator.userAgent) || new URLSearchParams(location.search).has('pi');
@@ -286,10 +320,10 @@ if (agentKey) $('agent-key-out').textContent = 'A demo agent key is saved in thi
 $('register-agent').addEventListener('click', async () => {
   try {
     const platform = $('agent-platform').value;
-    const out = await api('/api/agents/register', { method: 'POST', body: { name: $('agent-name').value || 'demo-agent', platform } });
+    const out = await api('/api/agents/register', { method: 'POST', body: { name: $('agent-name').value || 'demo-agent', platform, website: $('agent-website').value } });
     agentKey = out.apiKey;
     store.set('nuance.agentKey', agentKey);
-    $('agent-key-out').textContent = `Registered “${out.name}”. API key: ${out.apiKey} (copy it now)`;
+    $('agent-key-out').textContent = `Registered “${out.name}”. API key: ${out.apiKey} (copy it now). It starts on a trial of 100 requests a day until the admin approves it.`;
     renderGuide(GUIDE_FOR[platform] || 'other');
   } catch (ex) { $('agent-key-out').textContent = ex.message; }
 });

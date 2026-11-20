@@ -49,3 +49,25 @@ test('two server instances share one Postgres database', { skip: !url && 'set TE
     await b.stop();
   }
 });
+
+test('limits are shared between instances through Postgres', { skip: !url && 'set TEST_DATABASE_URL to run' }, async () => {
+  const { LIMITS } = await import('../src/guard.js');
+  const make = async () => {
+    const app = createApp({ dataFile: null, databaseUrl: url, limits: { ...LIMITS, createGuide: { per: 'ip', max: 2, windowSec: 3600 } } });
+    await new Promise((r) => app.listen(0, r));
+    return app;
+  };
+  const a = await make();
+  const b = await make();
+  const signUp = (app) => fetch(`http://127.0.0.1:${app.address().port}/api/labelers`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-real-ip': '203.0.113.99' }, body: '{"displayName":"x"}',
+  }).then((r) => r.status);
+  try {
+    assert.equal(await signUp(a), 201);
+    assert.equal(await signUp(b), 201);
+    assert.equal(await signUp(a), 429, 'the third sign-up is refused even on another instance');
+  } finally {
+    a.close(); b.close();
+    await a.db.close(); await b.db.close();
+  }
+});

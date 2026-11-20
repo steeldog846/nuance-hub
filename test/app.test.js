@@ -14,6 +14,7 @@ const webhooks = [];
 before(async () => {
   server = createApp({
     dataFile: null,
+    limits: false, // these tests create many accounts quickly; limits are tested in guard.test.js
     fetchImpl: async (url, init) => {
       if (String(url).endsWith('/v2/me')) {
         const ok = init.headers.authorization === 'Bearer good-pi-token';

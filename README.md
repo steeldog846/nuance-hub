@@ -59,6 +59,29 @@ who don't read or write much:
 * Words nobody can read yet are recorded as-is and sent to the community to work out.
 * All-lowercase typing is treated as normal, not as a signal.
 
+## Spam protection and sign-in
+
+* **Limits** (`src/guard.js`), counted in Postgres so every server instance shares them:
+  agent registrations and guest sign-ups per internet address (5 an hour), tap-page answers
+  per address (60 an hour), AI agent requests (120 a minute; 100 a day on trial, 20,000 a day
+  once approved), guide answers (30 a day for guests, 300 signed in) and shared moments
+  (3 a day for guests, 30 signed in). Over a limit, the API answers `429` with `Retry-After`.
+* **AI agents start on trial.** Approve or block them on the admin page.
+* **Guides** can sign in with Google (when `GOOGLE_CLIENT_ID` is set) or Pi. Name-only guests
+  still work, but their votes count half until they sign in or an admin trusts them. Only
+  Google's account id is stored, never the email address.
+* **Admin page** at `/admin.html`, protected by `NUANCE_ADMIN_TOKEN`: approve, trial or block
+  AI agents; trust or block guides (blocking signs them out everywhere).
+* A hidden form field catches simple sign-up bots.
+
+### Turning on Google sign-in
+
+1. In [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials),
+   create an **OAuth client ID** of type **Web application**.
+2. Under **Authorized JavaScript origins**, add your site, e.g. `https://nuance-hub-sand.vercel.app`.
+3. Copy the client id (ends in `.apps.googleusercontent.com`) into the `GOOGLE_CLIENT_ID`
+   environment variable and redeploy. No client secret is needed.
+
 ## Claude
 
 With `ANTHROPIC_API_KEY` set and `npm install` run, Claude does two jobs (`src/claude.js`):
@@ -139,7 +162,10 @@ npm test
 | `PORT` | Port to listen on (default 3000) |
 | `ANTHROPIC_API_KEY` | Connects Claude (see "Claude" below). Without it the app uses past answers and built-in rules. |
 | `NUANCE_MODEL` | Claude model id (default `claude-opus-5-5`) |
-| `NUANCE_ADMIN_TOKEN` | If set, registering a new agent requires header `x-admin-token` |
+| `NUANCE_ADMIN_TOKEN` | Password for the admin page (`/admin.html`) and admin API. Admin is off without it |
+| `NUANCE_REGISTRATION` | `closed` makes agent registration admin-only (default: open, agents start on trial) |
+| `GOOGLE_CLIENT_ID` | Turns on "Sign in with Google" for guides (an OAuth Web client id from Google Cloud) |
+| `NUANCE_LIMITS` | `off` disables rate limits (local experiments only) |
 | `NUANCE_DATA_FILE` | Where the JSON database lives (default `nuance/data/db.json`) |
 | `PUBLIC_URL` | Public address used in the OpenAPI spec and setup guides (default: taken from the request) |
 | `PI_API_URL` | Pi Platform API used to verify Pi sign-ins (default `https://api.minepi.com`) |
@@ -336,6 +362,7 @@ people have answered, `consensus` holds:
 | File | What it does |
 |---|---|
 | `src/server.js` | HTTP server, API routes, static web app |
+| `src/guard.js` | Rate limits shared across server instances, client address detection |
 | `src/claude.js` | The connection to Claude, with automatic fallback to the built-in rules |
 | `src/interpret.js` | Reads people's own words: Claude when connected; otherwise word lists for misspellings, emoji, "not"/"nahi", Hinglish |
 | `src/style.js` | Notices how a message was typed: CAPITALS, ALL CAPS, mOcKiNg case, "!!!", "sooo" |
@@ -347,7 +374,7 @@ people have answered, `consensus` holds:
 | `src/taxonomy.js` | The shared label set (intents, emotions, …) |
 | `src/redact.js` | Removes personal details |
 | `src/store.js` | Small JSON-file database |
-| `public/` | The web app (`index.html`) and the hosted tap page (`check.html`) |
+| `public/` | The web app (`index.html`), the hosted tap page (`check.html`) and the admin page (`admin.html`) |
 | `examples/agent-client.js` | How an agent connects |
 | `test/` | `npm test` |
 
@@ -375,8 +402,6 @@ This is a working prototype. Before real users:
 
 * **Database scale**: Postgres storage keeps a full in-memory copy per server instance,
   which is fine for tens of thousands of answers. Beyond that, move the lookups into SQL.
-* **Accounts**: labelers sign in with just a display name now. Add real sign-in
-  (email or OAuth) and rate limits to stop spam and ballot stuffing.
 * **Smarter "similar situation" matching**: word overlap works for a prototype; text
   embeddings would match "late again" with "delayed once more", and across languages.
 * **Quality control**: add "gold" questions with known answers to measure labelers,

@@ -30,11 +30,14 @@
         <h2>Join as a human guide</h2>
         <p class="muted">Claude, ChatGPT, Gemini, Copilot, Pi apps and other assistants send us moments they couldn't read: sarcasm, a joke, hidden frustration. You tell them what was really going on, and every connected AI learns from it.</p>
         <button class="primary pi-btn" id="pi-signin" type="button" hidden>Sign in with Pi</button>
-        <p class="small muted" id="pi-or" hidden>or</p>
+        <div id="google-signin" class="google-signin" hidden></div>
+        <p class="small muted" id="pi-or" hidden>or try it as a guest</p>
         <form id="signin-form" class="row">
           <input id="displayName" placeholder="Pick a display name" maxlength="40" required autocomplete="nickname">
-          <button class="primary" type="submit">Start</button>
+          <input class="trap" name="website" id="signin-website" tabindex="-1" autocomplete="off" aria-hidden="true">
+          <button class="primary" type="submit">Start as guest</button>
         </form>
+        <p class="small muted" id="guest-note">Guests can answer 30 questions a day, and their answers count half. Signing in with Google or Pi lifts that.</p>
         <p class="error" id="signin-error" hidden></p>
       </div>
 
@@ -42,6 +45,7 @@
         <span>Signed in as <strong id="me-name"></strong></span>
         <span class="pill" title="Rises when you agree with the final answer">Trust <strong id="me-rep"></strong></span>
         <span class="pill">Answered <strong id="me-count"></strong></span>
+        <span class="pill guest-pill" id="me-guest" hidden title="Sign in with Google or Pi for full weight and higher limits">Guest</span>
         <button class="link" id="signout">Sign out</button>
       </div>
 
@@ -182,6 +186,7 @@
         <div class="row">
           <input id="agent-name" placeholder="Name, e.g. support-bot" maxlength="100">
           <select id="agent-platform" aria-label="Platform"></select>
+          <input class="trap" id="agent-website" tabindex="-1" autocomplete="off" aria-hidden="true">
           <button class="ghost" id="register-agent">Register</button>
         </div>
         <p class="small muted" id="agent-key-out"></p>

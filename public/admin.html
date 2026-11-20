@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Nuance Hub admin</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .admin-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    .admin-table th, .admin-table td { text-align: left; padding: .5rem .4rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .admin-table th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+    .admin-table .actions { white-space: nowrap; }
+    .admin-table button { padding: .3rem .6rem; font-size: .85rem; margin: 0 .2rem .2rem 0; }
+    .status { border-radius: 999px; padding: .1rem .55rem; font-size: .8rem; background: var(--bg); border: 1px solid var(--line); }
+    .status.approved { color: var(--ok); }
+    .status.blocked { color: var(--bad); }
+    .scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Nuance Hub admin</h1>
+    <form id="login" class="card narrow">
+      <label class="stack">Admin password (the NUANCE_ADMIN_TOKEN you set in Vercel)
+        <input id="token" type="password" autocomplete="current-password" required>
+      </label>
+      <div class="row end"><button class="primary" type="submit">Open</button></div>
+      <p class="error" id="err" hidden></p>
+    </form>
+
+    <section id="panel" hidden>
+      <div class="card">
+        <h2>AI agents</h2>
+        <p class="small muted">New agents start on <b>trial</b> (100 requests a day). <b>Approve</b> the ones you recognise; <b>block</b> spam.</p>
+        <div class="scroll"><table class="admin-table"><thead><tr><th>Name</th><th>Platform</th><th>Status</th><th>Use</th><th></th></tr></thead><tbody id="agents"></tbody></table></div>
+      </div>
+      <div class="card">
+        <h2>People (guides)</h2>
+        <p class="small muted">Guests count half until they sign in with Google or Pi. <b>Trust</b> gives a guest full weight; <b>block</b> signs them out and stops them.</p>
+        <div class="scroll"><table class="admin-table"><thead><tr><th>Name</th><th>Signed in with</th><th>Answered</th><th>Trust score</th><th></th></tr></thead><tbody id="guides"></tbody></table></div>
+      </div>
+      <div class="row end"><button class="link" id="logout" type="button">Lock admin</button></div>
+    </section>
+  </main>
+  <script type="module">
+    const $ = (id) => document.getElementById(id);
+    const ss = { get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} } };
+    let token = ss.get('nuance.admin');
+
+    async function api(path, body) {
+      const res = await fetch(path, {
+        method: body ? 'POST' : 'GET',
+        headers: { 'content-type': 'application/json', 'x-admin-token': token || '' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
+      return data;
+    }
+
+    const cell = (row, text, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; if (text !== undefined) td.textContent = text; row.appendChild(td); return td; };
+    const btn = (parent, label, onClick, cls = 'ghost') => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = label; b.addEventListener('click', onClick); parent.appendChild(b); };
+
+    async function load() {
+      const data = await api('/api/admin/overview');
+      $('login').hidden = true;
+      $('panel').hidden = false;
+      const agents = $('agents');
+      agents.innerHTML = '';
+      if (!data.agents.length) cell(agents.insertRow(), 'No AI agents yet.').colSpan = 5;
+      for (const a of data.agents) {
+        const tr = agents.insertRow();
+        cell(tr, a.name);
+        cell(tr, a.platform);
+        const st = cell(tr);
+        const pill = document.createElement('span');
+        pill.className = `status ${a.status}`;
+        pill.textContent = a.status;
+        st.appendChild(pill);
+        cell(tr, `${a.checks} checks · ${a.questions} questions`);
+        const act = cell(tr, undefined, 'actions');
+        for (const s of ['approved', 'trial', 'blocked']) {
+          if (s !== a.status) btn(act, { approved: 'Approve', trial: 'Back to trial', blocked: 'Block' }[s], async () => { await api(`/api/admin/agents/${a.id}`, { status: s }); load(); }, s === 'approved' ? 'primary' : 'ghost');
+        }
+      }
+      const guides = $('guides');
+      guides.innerHTML = '';
+      if (!data.guides.length) cell(guides.insertRow(), 'No people yet.').colSpan = 5;
+      for (const g of data.guides) {
+        const tr = guides.insertRow();
+        cell(tr, g.displayName + (g.blocked ? ' (blocked)' : ''));
+        cell(tr, g.verifiedBy ? g.verifiedBy : g.trusted ? 'guest, trusted' : 'guest');
+        cell(tr, `${g.labeled} answers · ${g.shared} shared`);
+        cell(tr, Number(g.reputation).toFixed(2));
+        const act = cell(tr, undefined, 'actions');
+        if (!g.verifiedBy) btn(act, g.trusted ? 'Untrust' : 'Trust', async () => { await api(`/api/admin/guides/${g.id}`, { trusted: !g.trusted }); load(); });
+        btn(act, g.blocked ? 'Unblock' : 'Block', async () => { await api(`/api/admin/guides/${g.id}`, { blocked: !g.blocked }); load(); });
+      }
+    }
+
+    $('login').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      token = $('token').value;
+      $('err').hidden = true;
+      try { await load(); ss.set('nuance.admin', token); }
+      catch (ex) { $('err').textContent = ex.message; $('err').hidden = false; }
+    });
+    $('logout').addEventListener('click', () => { token = null; ss.set('nuance.admin', null); location.reload(); });
+    if (token) load().catch(() => { ss.set('nuance.admin', null); });
+  </script>
+</body>
+</html>

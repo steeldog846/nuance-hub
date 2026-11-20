@@ -121,6 +121,11 @@ export class Store {
             PRIMARY KEY (collection, id)
           );
           CREATE INDEX IF NOT EXISTS nuance_docs_seq ON nuance_docs (seq);
+          CREATE TABLE IF NOT EXISTS nuance_limits (
+            key text PRIMARY KEY,
+            window_start bigint NOT NULL,
+            count integer NOT NULL
+          );
         `);
         return pool;
       })();
