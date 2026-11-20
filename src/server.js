@@ -698,7 +698,11 @@ export function createApp({
       return { status: 201, body: { id: labeler.id, displayName: labeler.displayName, token: issueLabelerToken(labeler), verifiedBy: 'google' } };
     }],
 
-    ['GET', /^\/api\/config$/, () => ({ googleClientId, registration: process.env.NUANCE_REGISTRATION === 'closed' ? 'closed' : 'open' })],
+    ['GET', /^\/api\/config$/, () => ({
+      googleClientId,
+      registration: process.env.NUANCE_REGISTRATION === 'closed' ? 'closed' : 'open',
+      contactEmail: process.env.NUANCE_CONTACT_EMAIL || null,
+    })],
 
     ['GET', /^\/api\/me$/, (req) => {
       const l = authLabeler(req);
