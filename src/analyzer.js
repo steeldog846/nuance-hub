@@ -74,7 +74,8 @@ export function heuristicAnalyze(utterance, context = []) {
 const STOP = new Set('a an the and or but i you he she it we they is are was were be to of in on at for with this that so just my your me oh'.split(' '));
 
 export function tokens(text) {
-  return new Set((text || '').toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w)));
+  // Any script (Latin, Devanagari, Telugu, Tamil…): keep letters, their vowel signs (\p{M}) and digits.
+  return new Set((text || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}' ]+/gu, ' ').split(/\s+/).filter((w) => w && !STOP.has(w)));
 }
 
 export function similarity(a, b) {

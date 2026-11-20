@@ -538,3 +538,33 @@ test('if Claude fails, the built-in rules take over', async () => {
     setClaudeClient(null);
   }
 });
+
+test('own words in Hindi, Telugu and Tamil (script and romanised), with "not"', () => {
+  const r = (t) => { const x = interpretOwnWords(t); return [x.intents, x.emotions]; };
+  assert.deepEqual(r('गुस्सा आ गया'), [[], ['angry']]);
+  assert.deepEqual(r('गुस्सा नहीं था, बस मज़ाक था'), [['joking'], ['amused']]);
+  assert.deepEqual(r('ताना मार रहा था'), [['sarcastic'], []]);
+  assert.deepEqual(r('కోపం వచ్చింది'), [[], ['angry']]);
+  assert.deepEqual(r('వెటకారంగా అన్నాను'), [['sarcastic'], []]);
+  assert.deepEqual(r('kopam ledu, saradaga annanu'), [['joking'], []]);
+  assert.deepEqual(r('எனக்கு கோபம் வந்தது'), [[], ['angry']]);
+  assert.deepEqual(r('kobam illai, kindal pannen'), [['sarcastic'], []]);
+  assert.deepEqual(r('ரொம்ப சந்தோஷம்'), [[], ['happy']]);
+});
+
+test('messages in Indian scripts are matched and learned like English ones', async () => {
+  assert.ok(similarity('वाह, फिर से देर हो गई', 'वाह फिर से देर हो गई!') > 0.6, 'Devanagari words are compared, not dropped');
+  assert.ok(similarity('సూపర్, మళ్ళీ ఆలస్యం', 'సూపర్ మళ్ళీ ఆలస్యం') > 0.6, 'Telugu words are compared');
+  assert.equal(similarity('वाह, फिर से देर हो गई', 'Great, late again'), 0);
+
+  const { data: reg } = await call('/api/agents/register', { method: 'POST', body: { name: 'hindi-bot', platform: 'custom' } });
+  const ask = () => call('/api/v1/checks', { method: 'POST', token: reg.apiKey, body: { utterance: 'वाह, फिर से देर हो गई', consent: true } });
+  for (let i = 0; i < 5; i++) {
+    const c = await ask();
+    await call(`/api/v1/checks/${c.data.id}/answer`, { method: 'POST', token: reg.apiKey, body: { ownMeaning: 'ताना मार रहा था', ownFeeling: 'गुस्सा' } });
+  }
+  const sixth = await ask();
+  assert.equal(sixth.data.shouldAsk, false, 'learned from five Hindi answers');
+  assert.equal(sixth.data.suggested.intent, 'sarcastic');
+  assert.ok(sixth.data.options.some((o) => o.label === '💬 ताना मार रहा था'), 'their own words became a tap option');
+});

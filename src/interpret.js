@@ -10,10 +10,10 @@ import { askClaudeJson } from './claude.js';
 // [phrase or word stem, tag]. Multi-word phrases match anywhere; single words
 // also match with small spelling mistakes.
 const INTENT_WORDS = {
-  sarcastic: ['sarcastic', 'sarcasm', 'sarcas', 'sarky', 'opposite', 'not serious', 'didnt mean it', 'did not mean', 'taunt', 'taana', 'tana', 'vyang', 'ulta'],
-  joking: ['joke', 'joking', 'kidding', 'jk', 'lol', 'lmao', 'haha', 'hehe', 'fun', 'funny', 'mazak', 'mazaak', 'majak', 'masti', 'for fun'],
-  teasing: ['mazak uda', 'mazaak uda', 'tease', 'teasing', 'pulling your leg', 'leg pull', 'chidana', 'chida', 'messing with', 'trolling', 'troll'],
-  sincere: ['serious', 'seriously', 'meant it', 'mean it', 'honest', 'honestly', 'true', 'truly', 'sach', 'sachi', 'sacchi', 'literally meant'],
+  sarcastic: ['sarcastic', 'sarcasm', 'sarcas', 'sarky', 'opposite', 'not serious', 'didnt mean it', 'did not mean', 'taunt', 'taana', 'tana', 'vyang', 'ulta', 'ताना', 'तंज', 'व्यंग्य', 'उल्टा', 'vetakaram', 'vetakaaram', 'వెటకారం', 'వ్యంగ్యం', 'kindal', 'கிண்டல்', 'nakkal', 'நக்கல்'],
+  joking: ['joke', 'joking', 'kidding', 'jk', 'lol', 'lmao', 'haha', 'hehe', 'fun', 'funny', 'mazak', 'mazaak', 'majak', 'masti', 'for fun', 'मज़ाक', 'मजाक', 'मस्ती', 'हंसी', 'sarada', 'saradaga', 'సరదా', 'సరదాగా', 'జోక్', 'joke ga', 'vilayattu', 'விளையாட்டு', 'jokku', 'ஜோக்', 'நகைச்சுவை'],
+  teasing: ['mazak uda', 'mazaak uda', 'tease', 'teasing', 'pulling your leg', 'leg pull', 'chidana', 'chida', 'messing with', 'trolling', 'troll', 'चिढ़ाना', 'चिढ़ा', 'egathali', 'ఎగతాళి', 'ஓட்டுறேன்', 'ottinen', 'otta'],
+  sincere: ['serious', 'seriously', 'meant it', 'mean it', 'honest', 'honestly', 'true', 'truly', 'sach', 'sachi', 'sacchi', 'literally meant', 'सच', 'सच्ची', 'सचमुच', 'nijam', 'nijamga', 'నిజం', 'నిజంగా', 'unmai', 'unmaiya', 'உண்மை', 'உண்மையா'],
   passive_aggressive: ['passive aggressive', 'polite but', 'fake nice', 'pretending'],
   polite_refusal: ['no thanks', 'not interested', 'polite no', 'nahi chahiye', 'dont want'],
   exaggeration: ['exaggerat', 'overreact', 'over react', 'dramatic', 'drama'],
@@ -23,30 +23,36 @@ const INTENT_WORDS = {
 };
 
 const EMOTION_WORDS = {
-  angry: ['angry', 'anger', 'mad', 'furious', 'rage', 'pissed', 'gussa', 'gusa', 'ghussa', 'krodh'],
-  frustrated: ['frustrat', 'fed up', 'tired of', 'sick of', 'pareshan', 'preshan', 'irritat', 'had enough', 'enough'],
-  annoyed: ['annoy', 'irritated', 'bugged', 'chid', 'eye roll'],
-  sad: ['sad', 'upset', 'dukhi', 'crying', 'cry', 'depressed', 'low', 'udaas', 'udas', 'down'],
-  hurt: ['hurt', 'offended', 'bura laga', 'bura lga', 'insulted'],
-  happy: ['happy', 'glad', 'khush', 'khushi', 'good mood', 'great mood', 'joy'],
-  amused: ['funny', 'amused', 'lol', 'haha', 'hehe', 'laugh', 'mazaa', 'maza'],
-  anxious: ['worried', 'worry', 'scared', 'afraid', 'tension', 'tensed', 'nervous', 'anxious', 'dar', 'darr', 'fikar', 'chinta'],
-  smug: ['cocky', 'smug', 'show off', 'showing off', 'attitude', 'proud of myself', 'akad', 'ghamand'],
-  embarrassed: ['embarrass', 'sharam', 'awkward', 'shy'],
-  confused: ['confused', 'confuse', 'didnt understand', 'dont understand', 'samajh nahi', 'samjh nhi', 'lost'],
-  grateful: ['thanks', 'thank you', 'thankful', 'grateful', 'shukriya', 'dhanyavad', 'dhanyawad'],
-  excited: ['excited', 'cant wait', 'thrilled', 'pumped'],
-  disappointed: ['disappoint', 'let down', 'expected better', 'nirash'],
-  calm: ['calm', 'relaxed', 'fine', 'chill', 'okay', 'ok', 'theek', 'thik'],
+  angry: ['angry', 'anger', 'mad', 'furious', 'rage', 'pissed', 'gussa', 'gusa', 'ghussa', 'krodh', 'गुस्सा', 'ग़ुस्सा', 'क्रोध', 'kopam', 'kopamga', 'కోపం', 'kobam', 'kovam', 'கோபம்', 'கோவம்'],
+  frustrated: ['frustrat', 'fed up', 'tired of', 'sick of', 'pareshan', 'preshan', 'irritat', 'had enough', 'enough', 'परेशान', 'तंग', 'visugu', 'విసుగు', 'virakthi', 'சலிப்பு', 'salippu'],
+  annoyed: ['annoy', 'irritated', 'bugged', 'chid', 'eye roll', 'चिढ़', 'चिढ़ा हुआ', 'chiraku', 'chiraaku', 'చిరాకు', 'erichal', 'erichala', 'எரிச்சல்'],
+  sad: ['sad', 'upset', 'dukhi', 'crying', 'cry', 'depressed', 'low', 'udaas', 'udas', 'down', 'दुखी', 'उदास', 'दुख', 'badha', 'baadha', 'బాధ', 'dukham', 'దుఃఖం', 'sogam', 'kavalai', 'சோகம்', 'கவலை'],
+  hurt: ['hurt', 'offended', 'bura laga', 'bura lga', 'insulted', 'बुरा लगा', 'chala badha', 'manasu badha', 'మనసు బాధ', 'manasu kashtam', 'மனசு கஷ்டம்', 'vali'],
+  happy: ['happy', 'glad', 'khush', 'khushi', 'good mood', 'great mood', 'joy', 'खुश', 'ख़ुश', 'खुशी', 'santosham', 'santhosham', 'సంతోషం', 'happy ga', 'சந்தோஷம்', 'magizhchi', 'மகிழ்ச்சி'],
+  amused: ['funny', 'amused', 'lol', 'haha', 'hehe', 'laugh', 'mazaa', 'maza', 'हंसी', 'मज़ा', 'navvu', 'navvochindi', 'నవ్వు', 'sirippu', 'சிரிப்பு'],
+  anxious: ['worried', 'worry', 'scared', 'afraid', 'tension', 'tensed', 'nervous', 'anxious', 'dar', 'darr', 'fikar', 'chinta', 'डर', 'चिंता', 'घबराहट', 'bhayam', 'bayam', 'భయం', 'tension ga', 'பயம்', 'பதட்டம்', 'padhattam'],
+  smug: ['cocky', 'smug', 'show off', 'showing off', 'attitude', 'proud of myself', 'akad', 'ghamand', 'घमंड', 'अकड़', 'garvam', 'గర్వం', 'pogaru', 'పొగరు', 'thimiru', 'திமிர்'],
+  embarrassed: ['embarrass', 'sharam', 'awkward', 'shy', 'शर्म', 'शर्मिंदा', 'siggu', 'సిగ్గు', 'vetkam', 'வெட்கம்', 'அவமானம்'],
+  confused: ['confused', 'confuse', 'didnt understand', 'dont understand', 'samajh nahi', 'samjh nhi', 'lost', 'समझ नहीं', 'अर्थ नहीं', 'ardham kaledu', 'అర్థం కాలేదు', 'puriyala', 'புரியல', 'புரியவில்லை'],
+  grateful: ['thanks', 'thank you', 'thankful', 'grateful', 'shukriya', 'dhanyavad', 'dhanyawad', 'धन्यवाद', 'शुक्रिया', 'dhanyavadalu', 'ధన్యవాదాలు', 'nandri', 'நன்றி'],
+  excited: ['excited', 'cant wait', 'thrilled', 'pumped', 'उत्साहित', 'utsaham', 'ఉత్సాహం', 'உற்சாகம்'],
+  disappointed: ['disappoint', 'let down', 'expected better', 'nirash', 'निराश', 'niraasha', 'నిరాశ', 'ஏமாற்றம்', 'emaatram'],
+  calm: ['calm', 'relaxed', 'fine', 'chill', 'okay', 'ok', 'theek', 'thik', 'ठीक', 'ठीक है', 'parledu', 'పర్లేదు', 'paravala', 'பரவாயில்ல'],
   surprised: ['surprised', 'shocked', 'wow', 'omg'],
 };
+
+// Store every word list entry in the same Unicode form as people's input (normalize() uses NFC).
+for (const table of [INTENT_WORDS, EMOTION_WORDS]) {
+  for (const tag of Object.keys(table)) table[tag] = table[tag].map((w) => w.normalize('NFC').toLowerCase());
+}
 
 const EMOJI_EMOTION = Object.fromEntries(Object.entries(EMOTION_EMOJI).map(([e, emoji]) => [emoji, e]));
 Object.assign(EMOJI_EMOTION, { '😡': 'angry', '🤬': 'angry', '😭': 'sad', '😂': 'amused', '🤣': 'amused', '😒': 'annoyed', '🥲': 'hurt', '😔': 'disappointed', '❤️': 'happy', '👍': 'calm', '😎': 'smug' });
 const EMOJI_INTENT = { '😂': 'joking', '🤣': 'joking', '😜': 'teasing', '😝': 'teasing', '🙃': 'sarcastic', '😏': 'teasing', '🙄': 'sarcastic' };
 
 export function normalize(text = '') {
-  return text.toLowerCase().replace(/[’']/g, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  // \p{M} keeps vowel signs in Indian scripts (e.g. the "ो" in "कोपम्"/"కోపం"), which are part of the word.
+  return text.normalize('NFC').toLowerCase().replace(/[’']/g, '').replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function editDistance(a, b, max) {
@@ -65,17 +71,26 @@ function editDistance(a, b, max) {
   return prev[b.length];
 }
 
+const LATIN = /^[a-z0-9']+$/;
+
 function wordMatches(word, stem) {
   if (word === stem) return true;
+  // Non-Latin scripts: allow attached endings (कोपम्/కోపంగా, கோபமா) but no spelling guesses.
+  if (!LATIN.test(stem)) return stem.length >= 2 && word.startsWith(stem);
   if (stem.length >= 5 && word.startsWith(stem)) return true;       // frustrat → frustrated
   if (word.length < 5 || stem.length < 5) return false;              // short words must match exactly
   const max = stem.length >= 7 ? 2 : 1;                               // small typos: angery, seriuos
   return editDistance(word, stem, max) <= max;
 }
 
-const NEGATORS = new Set(['not', 'no', 'nahi', 'nhi', 'never', 'na', 'dont', 'didnt', 'wasnt', 'isnt']);
+const NEGATORS = new Set(['not', 'no', 'nahi', 'nhi', 'never', 'na', 'dont', 'didnt', 'wasnt', 'isnt', 'नहीं', 'नही', 'ना']);
 
-const AFTER_NEGATORS = new Set(['nahi', 'nhi', 'na']); // Hindi puts the "not" after: "gussa nahi tha"
+// Hindi, Telugu and Tamil put the "not" after the word: "gussa nahi tha", "kopam ledu", "kobam illai".
+const AFTER_NEGATORS = new Set([
+  'nahi', 'nhi', 'na', 'नहीं', 'नही', 'ना',
+  'ledu', 'kadu', 'kaadu', 'లేదు', 'కాదు',
+  'illai', 'illa', 'இல்லை', 'இல்ல',
+]);
 
 // A word counts unless something negates it: "not angry", "wasnt really serious", "gussa nahi".
 const negatedAt = (words, i) => NEGATORS.has(words[i - 1]) || NEGATORS.has(words[i - 2]) || AFTER_NEGATORS.has(words[i + 1]);
