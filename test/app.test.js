@@ -141,6 +141,17 @@ test('rejects bad auth and bad labels', async () => {
   assert.equal(bad.status, 404);
 });
 
+test('sends people from the old address to nuancehub.app, but keeps the API working there', async () => {
+  const old = { 'x-forwarded-host': 'nuance-hub-sand.vercel.app' };
+  const page = await fetch(base + '/c/chk_1?x=1', { headers: old, redirect: 'manual' });
+  assert.equal(page.status, 308);
+  assert.equal(page.headers.get('location'), 'https://nuancehub.app/c/chk_1?x=1');
+  const api = await fetch(base + '/api/health', { headers: old, redirect: 'manual' });
+  assert.equal(api.status, 200);
+  const here = await fetch(base + '/', { redirect: 'manual' });
+  assert.equal(here.status, 200);
+});
+
 test('serves the web app', async () => {
   const res = await fetch(base + '/');
   assert.equal(res.status, 200);

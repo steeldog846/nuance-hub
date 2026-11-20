@@ -821,6 +821,13 @@ export function createApp({
       return res.end();
     }
     const dynamic = url.pathname === '/mcp' || url.pathname.startsWith('/api/') || url.pathname.endsWith('openapi.json');
+    // People who open the old address are sent to the main one. AI agents
+    // already connected to it (the API and MCP) keep working unchanged.
+    const canonical = canonicalHost(req);
+    if (canonical && !dynamic && (req.method === 'GET' || req.method === 'HEAD')) {
+      res.writeHead(308, { location: `https://${canonical}${url.pathname}${url.search}` });
+      return res.end();
+    }
     if (!dynamic) return serveStatic(url.pathname, res);
     try {
       // Pick up what other server instances saved since this one last looked.
@@ -898,8 +905,19 @@ function checkStats(checks) {
   };
 }
 
+const MAIN_HOST = process.env.NUANCE_MAIN_HOST || 'nuancehub.app';
+const OLD_HOSTS = (process.env.NUANCE_OLD_HOSTS ?? 'nuance-hub-sand.vercel.app')
+  .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+
+/** The main host to send this request to, or null when it already came to the right place. */
+function canonicalHost(req) {
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase().replace(/:\d+$/, '');
+  return OLD_HOSTS.includes(host) ? MAIN_HOST : null;
+}
+
 function baseUrl(req) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
+  if (canonicalHost(req)) return `https://${MAIN_HOST}`;
   const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0];
   return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`;
 }
