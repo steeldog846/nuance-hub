@@ -51,8 +51,10 @@ who don't read or write much:
 * Choices start with an emoji (😠 angry, 🙄 I was being sarcastic) so they can be
   recognised at a glance.
 * Typed words are read automatically (`src/interpret.js`): spelling mistakes ("angery",
-  "seriuos"), no punctuation, emoji ("😡😡"), "not"/"nahi" ("gussa nahi tha"), and common
-  Hinglish words ("gussa", "mazak", "taana", "pareshan", "khush"…).
+  "seriuos"), no punctuation, emoji ("😡😡"), and "not" in each language ("gussa nahi tha",
+  "kopam ledu", "kobam illai"). Built-in word lists cover English, Hindi (Devanagari and
+  Hinglish), Telugu (script and romanised) and Tamil (script and romanised); Claude covers
+  every other language when connected.
 * The words are always kept exactly as written, and learned from.
 * **Words several people use become a tap option** for the next person in a similar
   situation ("💬 taana mar raha tha"), on both the meanings and feelings rows.
@@ -363,7 +365,7 @@ people have answered, `consensus` holds:
 | `src/server.js` | HTTP server, API routes, static web app |
 | `src/guard.js` | Rate limits shared across server instances, client address detection |
 | `src/claude.js` | The connection to Claude, with automatic fallback to the built-in rules |
-| `src/interpret.js` | Reads people's own words: Claude when connected; otherwise word lists for misspellings, emoji, "not"/"nahi", Hinglish |
+| `src/interpret.js` | Reads people's own words: Claude when connected; otherwise word lists (English, Hindi, Telugu, Tamil) with misspellings, emoji and "not" |
 | `src/style.js` | Notices how a message was typed: CAPITALS, ALL CAPS, mOcKiNg case, "!!!", "sooo" |
 | `src/learning.js` | Quick checks: ranks one-tap choices from past answers, decides when to stop asking |
 | `src/mcp.js` | MCP endpoint and tool definitions |
