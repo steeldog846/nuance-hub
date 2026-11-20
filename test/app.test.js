@@ -152,6 +152,15 @@ test('sends people from the old address to nuancehub.app, but keeps the API work
   assert.equal(here.status, 200);
 });
 
+test('serves the connection guide', async () => {
+  const res = await fetch(base + '/connect.html');
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /Connect your AI/);
+  assert.match(html, /quick_check_meaning/);
+  assert.equal((await fetch(base + '/connect.js')).status, 200);
+});
+
 test('serves the web app', async () => {
   const res = await fetch(base + '/');
   assert.equal(res.status, 200);

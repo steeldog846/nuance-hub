@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect your AI · Nuance Hub</title>
+  <meta name="description" content="Step-by-step: connect Claude, ChatGPT, Gemini, Copilot, Pi Network apps or any AI to Nuance Hub so it learns what people really mean.">
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    main h2 { margin-top: 0; }
+    main h3 { margin: 1.25rem 0 .4rem; }
+    main li { margin-bottom: .45rem; }
+    .toc { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0 0; padding: 0; list-style: none; }
+    .toc a { display: inline-block; padding: .3rem .75rem; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: inherit; }
+    .toc a:hover { border-color: var(--accent); }
+    .warn { border-left: 3px solid var(--warm); padding: .5rem .8rem; background: var(--accent-soft); border-radius: 8px; }
+    .key-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .key-row input, .key-row select { flex: 1 1 12rem; }
+    pre.code { white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◐</span>
+      <div>
+        <h1><a href="/" style="color:inherit;text-decoration:none">Nuance Hub</a></h1>
+        <p class="tag">Connect your AI in about five minutes.</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2>Connect your AI to Nuance Hub</h2>
+      <p>When a person's reply leaves your AI unsure (sarcastic? joking? quietly annoyed?), it asks Nuance Hub. It gets back two or three one-tap choices ranked by what earlier people in the same spot meant, or, once enough people agree, a confident answer so it doesn't have to ask at all.</p>
+      <p>Every connected AI learns from every answer, whichever company made it.</p>
+      <ol class="toc">
+        <li><a href="#key">1 · Get a key</a></li>
+        <li><a href="#claude">Claude</a></li>
+        <li><a href="#chatgpt">ChatGPT</a></li>
+        <li><a href="#gemini">Gemini</a></li>
+        <li><a href="#copilot">Copilot</a></li>
+        <li><a href="#pi">Pi Network</a></li>
+        <li><a href="#other">Any other AI</a></li>
+        <li><a href="#instructions">3 · Tell it when to ask</a></li>
+        <li><a href="#test">4 · Test it</a></li>
+      </ol>
+    </div>
+
+    <div class="card" id="key">
+      <h2>Step 1 · Get an API key</h2>
+      <p>Each AI gets its own key. Give it a name you'll recognise later.</p>
+      <div class="key-row">
+        <input id="agent-name" placeholder="Name, e.g. my-support-bot" maxlength="100" aria-label="AI name">
+        <select id="agent-platform" aria-label="Platform">
+          <option value="claude">Claude</option>
+          <option value="chatgpt">ChatGPT</option>
+          <option value="gemini">Gemini</option>
+          <option value="copilot">Copilot</option>
+          <option value="pi_network">Pi Network app</option>
+          <option value="custom">Other</option>
+        </select>
+        <input class="trap" id="agent-website" tabindex="-1" autocomplete="off" aria-hidden="true">
+        <button class="primary" id="register" type="button">Get my key</button>
+      </div>
+      <p class="error" id="key-error" hidden></p>
+      <div id="key-out" hidden>
+        <p class="ok">Your key (copy it now, it's shown only once):</p>
+        <pre class="code" id="key-value"></pre>
+        <p class="small muted">The steps below now include your key, ready to copy.</p>
+      </div>
+      <p class="small muted">New AIs start on a trial allowance of 100 checks a day. Ask the site owner (contact on the <a href="/privacy.html">privacy page</a>) to raise it.</p>
+      <p class="warn small"><b>Keep the key secret.</b> Put it only in your AI's settings or your server, never in a public web page or app code that runs in people's browsers.</p>
+    </div>
+
+    <div class="card">
+      <h2>Step 2 · Add Nuance Hub to your AI</h2>
+      <p class="small muted">Nuance Hub speaks three open standards: <b>MCP</b> (most assistants and agent tools), <b>OpenAPI</b> (custom GPTs, Gemini, Copilot Studio) and plain <b>REST</b>. Use whichever your AI offers.</p>
+
+      <h3 id="claude">Claude</h3>
+      <ol>
+        <li><b>claude.ai or the Claude desktop app</b>: Settings → Connectors → <i>Add custom connector</i>. Name it <code>Nuance Hub</code> and paste this URL:
+          <pre class="code" data-tpl="{BASE}/mcp?key={KEY}"></pre></li>
+        <li><b>Claude Code</b>: run
+          <pre class="code" data-tpl='claude mcp add --transport http nuance {BASE}/mcp --header "Authorization: Bearer {KEY}"'></pre></li>
+        <li><b>Your own app on the Claude API</b>: add <code data-tpl="{BASE}/mcp"></code> as a remote MCP server with the header <code data-tpl="Authorization: Bearer {KEY}"></code>.</li>
+      </ol>
+
+      <h3 id="chatgpt">ChatGPT</h3>
+      <ol>
+        <li><b>Custom GPT</b>: Explore GPTs → Create → Configure → <i>Create new action</i> → <i>Import from URL</i>:
+          <pre class="code" data-tpl="{BASE}/openapi.json"></pre>
+          Then Authentication → <i>API Key</i> → Auth type <i>Bearer</i>, and paste your key.</li>
+        <li><b>ChatGPT connectors (MCP)</b>: in Settings, add a custom connector with the URL below. If it only asks for a URL, this form already carries the key:
+          <pre class="code" data-tpl="{BASE}/mcp?key={KEY}"></pre></li>
+        <li><b>OpenAI API / Agents SDK</b>: add a remote MCP server, URL <code data-tpl="{BASE}/mcp"></code>, header <code data-tpl="Authorization: Bearer {KEY}"></code>.</li>
+      </ol>
+
+      <h3 id="gemini">Gemini</h3>
+      <ol>
+        <li><b>Gemini CLI</b>: add this to <code>~/.gemini/settings.json</code>:
+          <pre class="code" data-tpl='{"mcpServers": {"nuance": {
+  "httpUrl": "{BASE}/mcp",
+  "headers": {"Authorization": "Bearer {KEY}"}
+}}}'></pre></li>
+        <li><b>Gemini API / Vertex AI agents</b>: load <code data-tpl="{BASE}/openapi.json"></code> as an OpenAPI tool (bearer auth with your key), or connect the MCP URL above if your framework supports MCP.</li>
+      </ol>
+
+      <h3 id="copilot">Microsoft Copilot</h3>
+      <ol>
+        <li><b>Copilot Studio</b>: your agent → Tools → <i>Add a tool</i> → <i>Model Context Protocol</i>. URL <code data-tpl="{BASE}/mcp"></code>, authentication <i>API key</i> as a Bearer header. Or add a REST API tool from <code data-tpl="{BASE}/openapi.json"></code>.</li>
+        <li><b>GitHub Copilot in VS Code</b>: add an HTTP MCP server with the same URL and header.</li>
+      </ol>
+
+      <h3 id="pi">Pi Network apps</h3>
+      <ol>
+        <li>Call Nuance Hub from your app's <b>server</b>, never from the Pi Browser page, so the key stays secret.</li>
+        <li>When your AI is unsure what a user meant:
+          <pre class="code" data-tpl='POST {BASE}/api/v1/checks
+Authorization: Bearer {KEY}
+Content-Type: application/json
+
+{"utterance": "wow, great job", "context": [{"role": "ai", "text": "Your order is delayed again."}], "consent": true}'></pre>
+          Show the returned <code>options</code> as buttons, then send the tap to <code>/api/v1/checks/&lt;id&gt;/answer</code>.</li>
+        <li>Your Pi users can also become human guides: they open <a href="/">nuancehub.app</a> in the Pi Browser and tap <i>Sign in with Pi</i>.</li>
+      </ol>
+
+      <h3 id="other">Any other AI</h3>
+      <ol>
+        <li><b>MCP</b> (Cursor, LangChain, LlamaIndex, most agent tools): <code data-tpl="{BASE}/mcp"></code> with header <code data-tpl="Authorization: Bearer {KEY}"></code>.</li>
+        <li><b>OpenAPI</b>: <code data-tpl="{BASE}/openapi.json"></code>.</li>
+        <li><b>Plain HTTP</b>, for example in Python:
+          <pre class="code" data-tpl='import requests
+r = requests.post("{BASE}/api/v1/checks",
+    headers={"Authorization": "Bearer {KEY}"},
+    json={"utterance": "Oh great, another Monday.", "consent": True})
+check = r.json()
+print(check["shouldAsk"], check["prompt"], [o["label"] for o in check["options"]])'></pre></li>
+      </ol>
+    </div>
+
+    <div class="card" id="instructions">
+      <h2>Step 3 · Tell your AI when to use it</h2>
+      <p>Paste this into your AI's instructions (a Custom GPT's <i>Instructions</i>, a Claude Project's instructions, a Copilot agent's description, or your system prompt):</p>
+      <pre class="code" id="instructions-text">When a person's reply could mean more than one thing (sarcasm, a joke, frustration, mixed feelings, slang, or a language you are unsure of), call Nuance Hub's quick_check_meaning AFTER they reply. Never ask in advance.
+- If shouldAsk is false, act on "suggested" without bothering the person.
+- If shouldAsk is true, show the short prompt and options as buttons or a numbered list. Let them pick more than one, or answer in their own words.
+- Record their choice with record_user_choice, then reply in the way that fits what they meant.
+- After your reply, offer one tap ("That helped" / "Still missed the point" / "Right idea, wrong tone") and record it with record_reaction.
+Only send a message after the person has agreed that it can be shared to improve AI.</pre>
+      <button class="ghost" id="copy-instructions" type="button">Copy instructions</button>
+      <p class="small muted">Using REST instead of MCP? The same steps are <code>POST /api/v1/checks</code>, <code>/answer</code> and <code>/reaction</code>.</p>
+    </div>
+
+    <div class="card" id="test">
+      <h2>Step 4 · Test it</h2>
+      <ol>
+        <li>Start a new chat with your AI and send: <i>“Fantastic. My parcel is late AGAIN.”</i></li>
+        <li>It should call Nuance Hub and show you two or three taps, such as <i>😤 Sarcastic, fed up</i>.</li>
+        <li>Tap one. Do it a few times with similar messages: the choices re-order, and once enough people agree it stops asking and just understands.</li>
+        <li>Open the <a href="/">Community tab</a> to see your AI listed, and its questions counted.</li>
+      </ol>
+      <p class="small muted">Not working? Check that the key is pasted in full (it starts with <code>nk_</code>) and that you used the new address, <code>https://nuancehub.app</code>. A “401” error means the key is missing or mistyped; “429” means the daily allowance is used up.</p>
+    </div>
+  </main>
+
+  <footer class="foot small muted"><a href="/">Nuance Hub</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></footer>
+  <script type="module" src="/connect.js"></script>
+</body>
+</html>

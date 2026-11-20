@@ -179,6 +179,8 @@ NUANCE_URL=http://localhost:3000 node examples/agent-client.js
 
 ## Connecting AI platforms
 
+A step-by-step guide for people (Claude, ChatGPT, Gemini, Copilot, Pi Network apps and others, with instructions to paste into the AI) is live at **https://nuancehub.app/connect.html**.
+
 Three open doors, all using the same API key from `POST /api/agents/register`:
 
 | Door | URL | Who uses it |
