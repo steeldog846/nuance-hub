@@ -18,7 +18,7 @@ function keyShape() {
   const kind = key.startsWith('sk-ant-api') ? 'Claude API key'
     : key.startsWith('sk-ant-admin') ? 'Claude Admin key (cannot call Claude; create a normal API key)'
     : key.startsWith('sk-ant-oat') || key.startsWith('sk-ant-ort') ? 'Claude login token (not an API key; create one at console.anthropic.com)'
-    : key.startsWith('sk-ant-') ? 'other Anthropic key'
+    : key.startsWith('sk-ant-') ? 'Claude API key'
     : key.startsWith('sk-') ? 'not an Anthropic key (looks like another provider\'s key)'
     : 'not an Anthropic key';
   // Claude API keys are only letters, digits, "-" and "_"; anything else means extra text got pasted in.
@@ -26,7 +26,6 @@ function keyShape() {
   return {
     kind,
     length: key.length,
-    usualLength: 108,
     hadExtraSpacesOrQuotes: raw !== key,
     unexpectedCharacters: unexpected ? [...new Set(unexpected)].map((c) => (c === ' ' ? 'space' : c === '\n' ? 'line break' : c === '\t' ? 'tab' : `"${c}"`)) : [],
     timesKeyPrefixAppears: key.split('sk-ant-').length - 1,
