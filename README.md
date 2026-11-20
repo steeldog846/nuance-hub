@@ -151,7 +151,6 @@ people who use the app:
 Requires Node 20 or later.
 
 ```bash
-cd nuance
 npm install          # optional: only needed for the Claude-powered first answer
 npm start            # http://localhost:3000
 npm test
@@ -166,7 +165,7 @@ npm test
 | `NUANCE_REGISTRATION` | `closed` makes agent registration admin-only (default: open, agents start on trial) |
 | `GOOGLE_CLIENT_ID` | Turns on "Sign in with Google" for guides (an OAuth Web client id from Google Cloud) |
 | `NUANCE_LIMITS` | `off` disables rate limits (local experiments only) |
-| `NUANCE_DATA_FILE` | Where the JSON database lives (default `nuance/data/db.json`) |
+| `NUANCE_DATA_FILE` | Where the JSON database lives (default `data/db.json`) |
 | `PUBLIC_URL` | Public address used in the OpenAPI spec and setup guides (default: taken from the request) |
 | `PI_API_URL` | Pi Platform API used to verify Pi sign-ins (default `https://api.minepi.com`) |
 
@@ -380,10 +379,10 @@ people have answered, `consensus` holds:
 
 ## Hosting on Vercel
 
-`nuance/` is ready for Vercel: `api/index.js` handles every request that isn't a static
+The app is ready for Vercel: `api/index.js` handles every request that isn't a static
 file, and `vercel.json` routes them there.
 
-1. Create a Vercel project with **Root Directory** `nuance`.
+1. Create a Vercel project from this repository (no root directory or build settings needed).
 2. Add a Postgres database: Vercel → the project → **Storage** → **Create Database** →
    **Neon** (free tier) → connect it to the project. That sets `DATABASE_URL`. The app
    creates its own table on first use.
@@ -411,5 +410,4 @@ This is a working prototype. Before real users:
   claude.ai and ChatGPT can attach without putting a key in the URL.
 * **Listing**: submit the MCP server to public MCP registries and the GPT to the GPT
   Store so people can find it.
-* **Rewards**: pay human guides in Pi per settled answer using Pi payments (the Pi
-  page in this repo has the payment flow to build on).
+* **Rewards**: pay human guides in Pi per settled answer using Pi Network payments.
