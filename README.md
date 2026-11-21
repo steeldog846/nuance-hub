@@ -381,6 +381,10 @@ people have answered, `consensus` holds:
 | `examples/agent-client.js` | How an agent connects |
 | `test/` | `npm test` |
 
+## Pi Desktop (SoloHost)
+
+`solohost/` holds a SoloHost package so Pi Desktop users can install Nuance Hub as an app. It runs a tiny nginx container that opens the live site at https://nuancehub.app, so every install joins the same shared community (a separate copy would keep its own data). To publish, open SoloHost, start a new app, and paste `solohost/docker-compose.yml` and `solohost/config_options.yml` into their fields.
+
 ## Hosting on Vercel
 
 The app is ready for Vercel: `api/index.js` handles every request that isn't a static
