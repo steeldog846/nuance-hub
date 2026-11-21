@@ -1,0 +1,12 @@
+title: Nuance Hub
+eyebrow: SoloHost App
+description: >
+  Teach every AI what people really mean. Answer quick questions about
+  sarcasm, jokes and feelings, and every connected AI learns from you.
+  This opens the shared community at nuancehub.app.
+footer_hint: Help and privacy at https://nuancehub.app/privacy.html
+output_file: .env
+after_save: >
+  Saved. Open Nuance Hub from your apps. There is nothing to set up: just
+  start answering, or sign in with Google for full trust.
+fields: []

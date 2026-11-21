@@ -1,0 +1,28 @@
+# Nuance Hub for Pi Desktop (SoloHost).
+# A tiny web server that opens the live Nuance Hub at https://nuancehub.app,
+# so everyone who installs it joins the same shared community.
+services:
+  web:
+    image: nginx:1.27.3-alpine
+    restart: unless-stopped
+    labels:
+      pi.ui.primary: "true"
+    ports:
+      - "127.0.0.1:18471:8080"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cat > /etc/nginx/conf.d/default.conf <<'CONF'
+        server {
+          listen 8080;
+          location = /healthz { return 200 'ok'; }
+          location / { return 302 https://nuancehub.app/; }
+        }
+        CONF
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
